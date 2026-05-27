@@ -34,7 +34,7 @@ impl Default for SchedulerConfig {
 
 /// The phase currently emitted to the UI. `MicroBreak` is a transient
 /// interruption layered on top of a `Work` phase.
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub enum Phase {
     Idle,
@@ -44,7 +44,7 @@ pub enum Phase {
     MicroBreak,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TickEvent {
     pub phase: Phase,
     pub remaining_secs: u32,
@@ -263,7 +263,7 @@ impl Scheduler {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct PhaseEndPayload {
     ended: Phase,
     started: Phase,

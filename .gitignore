@@ -10,3 +10,9 @@ dist-ssr
 
 src-tauri/target
 src-tauri/gen
+
+# personal references / screenshots — not part of the codebase
+interesting_inspiration/
+*Screenshot*.png
+s[0-9].png
+p[0-9].png

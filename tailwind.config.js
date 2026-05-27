@@ -8,10 +8,10 @@ export default {
       },
       colors: {
         focus: {
-          work: "#dc2626",
-          short: "#16a34a",
-          long: "#2563eb",
-          micro: "#a855f7",
+          work:  "rgb(var(--c-accent) / <alpha-value>)",
+          short: "rgb(var(--c-short)  / <alpha-value>)",
+          long:  "rgb(var(--c-long)   / <alpha-value>)",
+          micro: "rgb(var(--c-micro)  / <alpha-value>)",
         },
       },
     },

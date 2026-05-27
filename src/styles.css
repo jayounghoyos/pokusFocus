@@ -5,13 +5,78 @@
 @layer base {
   html, body, #root { height: 100%; }
   body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+
+  /* default = crimson */
+  :root,
+  :root[data-theme="crimson"] {
+    --c-accent: 220 38 38;
+    --c-short:  16 185 129;
+    --c-long:   59 130 246;
+    --c-micro: 168  85 247;
+  }
+  :root[data-theme="mist"] {
+    --c-accent:  96 165 250;
+    --c-short:  110 231 183;
+    --c-long:   165 180 252;
+    --c-micro:  244 114 182;
+  }
+  :root[data-theme="forest"] {
+    --c-accent:  16 185 129;
+    --c-short:  251 191  36;
+    --c-long:    20 184 166;
+    --c-micro:  167 139 250;
+  }
+  :root[data-theme="plum"] {
+    --c-accent: 168  85 247;
+    --c-short:  244 114 182;
+    --c-long:   129 140 248;
+    --c-micro:  234  88  12;
+  }
+  :root[data-theme="amber"] {
+    --c-accent: 245 158  11;
+    --c-short:  132 204  22;
+    --c-long:   234  88  12;
+    --c-micro:  168  85 247;
+  }
+  :root[data-theme="slate"] {
+    --c-accent: 161 161 170;
+    --c-short:  113 113 122;
+    --c-long:    82  82  91;
+    --c-micro:  212 212 216;
+  }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
 }
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium
+    @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium
            transition-colors disabled:opacity-50 disabled:pointer-events-none;
   }
   .btn-primary { @apply btn bg-zinc-100 text-zinc-900 hover:bg-white; }
   .btn-ghost   { @apply btn bg-transparent text-zinc-300 hover:bg-zinc-800/60; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fade-in 0.35s ease-out both;
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.animate-scale-in {
+  animation: scale-in 0.18s ease-out both;
 }

@@ -4,6 +4,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
 
 /// Cadence and behavior settings for the scheduler. Persisted via tauri-plugin-store
 /// at the frontend; the Rust side just receives full updates.
@@ -16,7 +17,22 @@ pub struct SchedulerConfig {
     pub micro_break_enabled: bool,
     pub micro_break_interval_secs: u32,
     pub micro_break_duration_secs: u32,
+    #[serde(default = "default_true")]
+    pub auto_advance: bool,
+    #[serde(default)]
+    pub strict_mode: bool,
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
+    #[serde(default = "default_true")]
+    pub auto_check_tasks: bool,
+    #[serde(default = "default_true")]
+    pub pre_break_warning_enabled: bool,
+    #[serde(default = "default_pre_warning_secs")]
+    pub pre_break_warning_secs: u32,
 }
+
+fn default_true() -> bool { true }
+fn default_pre_warning_secs() -> u32 { 30 }
 
 impl Default for SchedulerConfig {
     fn default() -> Self {
@@ -28,6 +44,12 @@ impl Default for SchedulerConfig {
             micro_break_enabled: true,
             micro_break_interval_secs: 10 * 60,
             micro_break_duration_secs: 20,
+            auto_advance: true,
+            strict_mode: false,
+            sound_enabled: true,
+            auto_check_tasks: true,
+            pre_break_warning_enabled: true,
+            pre_break_warning_secs: 30,
         }
     }
 }
@@ -64,6 +86,9 @@ struct State {
     secs_since_last_micro: u32,
     micro_active: bool,
     micro_remaining: u32,
+    /// If the user postpones a break, we go back to a brief Work phase
+    /// and remember the break to restore once that brief Work ends.
+    postponed_break: Option<(Phase, u32)>,
 }
 
 impl State {
@@ -79,6 +104,7 @@ impl State {
             secs_since_last_micro: 0,
             micro_active: false,
             micro_remaining: 0,
+            postponed_break: None,
         }
     }
 
@@ -113,6 +139,12 @@ impl State {
     fn advance_after_main_end(&mut self) {
         match self.main_phase {
             Phase::Work => {
+                if let Some((break_phase, break_total)) = self.postponed_break.take() {
+                    self.main_phase = break_phase;
+                    self.main_total = break_total;
+                    self.main_remaining = break_total;
+                    return;
+                }
                 self.cycle += 1;
                 if self.cycle % self.config.long_break_every == 0 {
                     self.enter_long_break();
@@ -213,14 +245,37 @@ impl Scheduler {
             }
         }
 
+        if s.main_phase == Phase::Work
+            && s.config.pre_break_warning_enabled
+            && s.main_remaining == s.config.pre_break_warning_secs
+            && s.main_remaining > 0
+        {
+            let _ = self.app.emit("scheduler://pre-break", ());
+            let _ = self
+                .app
+                .notification()
+                .builder()
+                .title("Break coming up")
+                .body(format!(
+                    "Break in {} seconds",
+                    s.config.pre_break_warning_secs
+                ))
+                .show();
+        }
+
         if s.main_remaining == 0 {
             let ending = s.main_phase;
+            let was_postponed = ending == Phase::Work && s.postponed_break.is_some();
             s.advance_after_main_end();
+            if !s.config.auto_advance {
+                s.running = false;
+            }
             let _ = self
                 .app
                 .emit("scheduler://phase-end", PhaseEndPayload {
                     ended: ending,
                     started: s.main_phase,
+                    is_postponed: was_postponed,
                 });
         }
     }
@@ -239,18 +294,61 @@ impl Scheduler {
 
     pub fn skip(&self) {
         let mut s = self.state.lock();
+        if s.config.strict_mode
+            && matches!(
+                s.main_phase,
+                Phase::ShortBreak | Phase::LongBreak
+            )
+            && !s.micro_active
+        {
+            return;
+        }
         if s.micro_active {
             s.micro_active = false;
             s.micro_remaining = 0;
+            let _ = self.app.emit("scheduler://micro-end", ());
             return;
         }
+        let ending = s.main_phase;
+        let was_postponed = ending == Phase::Work && s.postponed_break.is_some();
         s.advance_after_main_end();
+        let _ = self.app.emit(
+            "scheduler://phase-end",
+            PhaseEndPayload {
+                ended: ending,
+                started: s.main_phase,
+                is_postponed: was_postponed,
+            },
+        );
     }
 
     pub fn reset(&self) {
         let mut s = self.state.lock();
         s.running = false;
+        s.postponed_break = None;
         s.enter_idle();
+    }
+
+    pub fn postpone(&self, secs: u32) {
+        let mut s = self.state.lock();
+        if !matches!(s.main_phase, Phase::ShortBreak | Phase::LongBreak) {
+            return;
+        }
+        let break_phase = s.main_phase;
+        let break_total = s.main_total;
+        s.postponed_break = Some((break_phase, break_total));
+        s.main_phase = Phase::Work;
+        s.main_total = secs;
+        s.main_remaining = secs;
+        s.secs_since_last_micro = 0;
+        let _ = self.app.emit(
+            "scheduler://phase-end",
+            PhaseEndPayload {
+                ended: break_phase,
+                started: Phase::Work,
+                is_postponed: true,
+            },
+        );
     }
 
     pub fn config(&self) -> SchedulerConfig {
@@ -267,6 +365,7 @@ impl Scheduler {
 struct PhaseEndPayload {
     ended: Phase,
     started: Phase,
+    is_postponed: bool,
 }
 
 /// Thin Tauri-managed wrapper around `Arc<Scheduler>`.
@@ -277,6 +376,7 @@ impl SchedulerHandle {
     pub fn pause(&self) { self.0.pause(); }
     pub fn skip(&self) { self.0.skip(); }
     pub fn reset(&self) { self.0.reset(); }
+    pub fn postpone(&self, secs: u32) { self.0.postpone(secs); }
     pub fn config(&self) -> SchedulerConfig { self.0.config() }
     pub fn update_config(&self, c: SchedulerConfig) { self.0.update_config(c); }
 }

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use scheduler::{Phase, Scheduler, SchedulerConfig, SchedulerHandle, TickEvent};
 use serde::Deserialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 
 const TRAY_ID: &str = "pokus-focus-tray";
@@ -34,6 +34,11 @@ fn scheduler_reset(handle: tauri::State<'_, SchedulerHandle>) {
 }
 
 #[tauri::command]
+fn scheduler_postpone(handle: tauri::State<'_, SchedulerHandle>, secs: u32) {
+    handle.postpone(secs);
+}
+
+#[tauri::command]
 fn scheduler_config(handle: tauri::State<'_, SchedulerHandle>) -> SchedulerConfig {
     handle.config()
 }
@@ -56,8 +61,24 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        })
         .setup(|app| {
             build_tray(app.handle())?;
+
+            let started_minimized = std::env::args().any(|a| a == "--minimized");
+            if !started_minimized {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
 
             let app_handle = app.handle().clone();
             let scheduler = Arc::new(Scheduler::new(app_handle.clone(), SchedulerConfig::default()));
@@ -72,6 +93,7 @@ pub fn run() {
             scheduler_pause,
             scheduler_skip,
             scheduler_reset,
+            scheduler_postpone,
             scheduler_config,
             scheduler_update_config,
         ])
@@ -93,12 +115,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .tooltip("pokusFocus — idle")
         .icon(app.default_window_icon().cloned().expect("no default icon"))
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
-            }
+            "show" => toggle_main_window(app, true),
             "pause" => {
                 if let Some(h) = app.try_state::<SchedulerHandle>() {
                     h.pause();
@@ -111,6 +128,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "quit" => app.exit(0),
             _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_main_window(tray.app_handle(), false);
+            }
         })
         .build(app)?;
 
@@ -214,5 +241,17 @@ fn open_toast(app: &AppHandle) {
 fn close_window(app: &AppHandle, label: &str) {
     if let Some(win) = app.get_webview_window(label) {
         let _ = win.close();
+    }
+}
+
+fn toggle_main_window(app: &AppHandle, force_show: bool) {
+    let Some(win) = app.get_webview_window("main") else { return };
+    let visible = win.is_visible().unwrap_or(false);
+    if visible && !force_show {
+        let _ = win.hide();
+    } else {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
     }
 }

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { loadConfig } from "../lib/config";
+import { stopAllChimes } from "../lib/sound";
 
 type Phase = "Work" | "ShortBreak" | "LongBreak" | "MicroBreak" | "Idle";
 
@@ -28,6 +30,8 @@ function fmt(sec: number) {
 
 export function BreakOverlay() {
   const [tick, setTick] = useState<TickEvent | null>(null);
+  const config = loadConfig();
+  const postponeMins = Math.round(config.postpone_secs / 60);
 
   useEffect(() => {
     const unlisten = listen<TickEvent>("scheduler://tick", (e) => {
@@ -35,6 +39,7 @@ export function BreakOverlay() {
       if (t.phase === "ShortBreak" || t.phase === "LongBreak") {
         setTick(t);
       } else {
+        stopAllChimes();
         getCurrentWindow().close().catch(() => {});
       }
     });
@@ -42,6 +47,22 @@ export function BreakOverlay() {
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        invoke("scheduler_skip");
+        stopAllChimes();
+        getCurrentWindow().close().catch(() => {});
+      } else if (e.key === "p" || e.key === "P") {
+        invoke("scheduler_postpone", { secs: config.postpone_secs });
+        stopAllChimes();
+        getCurrentWindow().close().catch(() => {});
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [config.postpone_secs]);
 
   if (!tick) {
     return (
@@ -57,7 +78,8 @@ export function BreakOverlay() {
   return (
     <div
       className={`h-full w-full flex flex-col items-center justify-center
-                  bg-gradient-to-br ${tone} via-zinc-950 to-zinc-950 text-zinc-100 select-none`}
+                  bg-gradient-to-br ${tone} via-zinc-950 to-zinc-950
+                  text-zinc-100 select-none animate-fade-in`}
     >
       <p className="text-xs uppercase tracking-[0.3em] text-zinc-400 mb-4">
         {tick.phase === "LongBreak" ? "Long break" : "Short break"}
@@ -79,14 +101,29 @@ export function BreakOverlay() {
       <div className="mt-12 flex gap-3">
         <button
           className="btn-ghost"
+          onClick={() => {
+            invoke("scheduler_postpone", { secs: config.postpone_secs });
+            stopAllChimes();
+            getCurrentWindow().close().catch(() => {});
+          }}
+        >
+          + {postponeMins} min
+        </button>
+        <button
+          className="btn-ghost"
           onClick={async () => {
             await invoke("scheduler_skip");
+            stopAllChimes();
             getCurrentWindow().close().catch(() => {});
           }}
         >
           Skip break
         </button>
       </div>
+
+      <p className="absolute bottom-6 text-[10px] text-zinc-700 tracking-wider">
+        Esc to skip · P to postpone
+      </p>
     </div>
   );
 }

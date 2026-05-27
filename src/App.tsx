@@ -3,6 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BreakOverlay } from "./components/BreakOverlay";
 import { MicroToast } from "./components/MicroToast";
+import { TaskList } from "./components/TaskList";
+import { Settings } from "./components/Settings";
+import { useConfig } from "./lib/config";
+import { useTheme } from "./lib/theme";
+import { playChime } from "./lib/sound";
 
 type Phase = "Work" | "ShortBreak" | "LongBreak" | "MicroBreak" | "Idle";
 
@@ -11,6 +16,11 @@ interface TickEvent {
   remaining_secs: number;
   total_secs: number;
   cycle: number;
+}
+
+interface PhaseEndEvent {
+  ended: Phase;
+  started: Phase;
 }
 
 const phaseColor: Record<Phase, string> = {
@@ -43,48 +53,96 @@ function Dashboard() {
     cycle: 0,
   });
   const [running, setRunning] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [config, setConfig] = useConfig();
+  const [theme, setTheme] = useTheme();
 
   useEffect(() => {
-    const unlistenP = listen<TickEvent>("scheduler://tick", (e) => {
+    const unlisten = listen<TickEvent>("scheduler://tick", (e) => {
       setState(e.payload);
     });
     return () => {
-      unlistenP.then((fn) => fn());
+      unlisten.then((fn) => fn());
     };
   }, []);
+
+  useEffect(() => {
+    const unlisten = listen<PhaseEndEvent>("scheduler://phase-end", () => {
+      if (config.sound_enabled) {
+        playChime({
+          style: config.chime_style,
+          volume: config.chime_volume,
+          repeat: config.chime_repeat,
+        });
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [config.sound_enabled, config.chime_style, config.chime_volume, config.chime_repeat]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (target?.isContentEditable) return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (running) {
+          invoke("scheduler_pause");
+          setRunning(false);
+        } else {
+          invoke("scheduler_start");
+          setRunning(true);
+        }
+      } else if (e.key === "r" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        invoke("scheduler_reset");
+        setRunning(false);
+      } else if (e.key === "n" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        invoke("scheduler_skip");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [running]);
 
   const progress = state.total_secs > 0
     ? 1 - state.remaining_secs / state.total_secs
     : 0;
 
   return (
-    <main className="h-full flex flex-col">
-      <header className="px-6 pt-6 pb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className={`h-2.5 w-2.5 rounded-full ${phaseColor[state.phase]}`} />
-          <h1 className="text-sm font-medium tracking-wide text-zinc-300">
-            pokusFocus
-          </h1>
-        </div>
-        <span className="text-xs text-zinc-500">cycle {state.cycle}</span>
-      </header>
+    <main className="h-full flex flex-col items-center justify-center gap-10 py-10 relative">
+      <button
+        onClick={() => setShowSettings(true)}
+        className="absolute top-3 right-3 text-zinc-500 hover:text-zinc-200 transition-colors"
+        aria-label="Settings"
+        title="Settings"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
 
-      <section className="flex-1 flex flex-col items-center justify-center px-6">
-        <p className="text-xs uppercase tracking-[0.2em] text-zinc-500 mb-2">
+      <section className="flex flex-col items-center">
+        <p className="text-sm uppercase tracking-[0.22em] text-zinc-500 mb-3 transition-colors duration-500">
           {phaseLabel[state.phase]}
         </p>
-        <p className="text-7xl font-light tabular-nums tracking-tight">
+        <p className="text-8xl font-light tabular-nums tracking-tight">
           {fmt(state.remaining_secs)}
         </p>
 
-        <div className="w-full max-w-sm mt-8 h-1 bg-zinc-900 rounded-full overflow-hidden">
+        <div className="w-80 mt-7 h-1.5 bg-zinc-900 rounded-full overflow-hidden">
           <div
-            className={`h-full ${phaseColor[state.phase]} transition-[width] duration-1000 ease-linear`}
+            className={`h-full ${phaseColor[state.phase]} transition-all duration-1000 ease-linear`}
             style={{ width: `${progress * 100}%` }}
           />
         </div>
 
-        <div className="mt-8 flex gap-2">
+        <div className="mt-7 flex gap-2">
           {!running ? (
             <button
               className="btn-primary"
@@ -108,6 +166,7 @@ function Dashboard() {
           )}
           <button
             className="btn-ghost"
+            disabled={config.strict_mode && (state.phase === "ShortBreak" || state.phase === "LongBreak")}
             onClick={async () => {
               await invoke("scheduler_skip");
             }}
@@ -126,9 +185,17 @@ function Dashboard() {
         </div>
       </section>
 
-      <footer className="px-6 pb-4 text-center text-xs text-zinc-600">
-        v0.1.0 · personal build
-      </footer>
+      <TaskList autoCheck={config.auto_check_tasks} />
+
+      {showSettings && (
+        <Settings
+          config={config}
+          onChange={setConfig}
+          theme={theme}
+          onThemeChange={setTheme}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </main>
   );
 }

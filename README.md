@@ -2,50 +2,121 @@
 
 Personal desktop pomodoro that combines focus timing with stretch-break reminders — replacing Pomofocus and Stretchly side by side, with a single coordinated schedule.
 
+Tauri 2 + React + TypeScript + Tailwind. ~10 MB binary, ~50 MB idle RAM. Linux only.
+
+---
+
+## Install — `.deb` (recommended)
+
+### 1. Install runtime system deps (one-time)
+
+```bash
+sudo apt update
+sudo apt install -y libwebkit2gtk-4.1-0 libayatana-appindicator3-1
+```
+
+### 2. Get the `.deb`
+
+Either grab `pokusFocus_0.1.0_amd64.deb` from a release, or build it locally (see [Build from source](#build-from-source)).
+
+### 3. Install it
+
+Copy to `/tmp/` first so apt doesn't complain about sandbox permissions, then install:
+
+```bash
+cp pokusFocus_0.1.0_amd64.deb /tmp/
+sudo apt install /tmp/pokusFocus_0.1.0_amd64.deb
+```
+
+### 4. Launch
+
+Open it from your app launcher (search **pokusFocus** in GNOME Activities), or open the app and toggle **Settings → System → Start at login** so it auto-starts to your tray on boot.
+
+### Uninstall
+
+```bash
+sudo apt remove pokus-focus           # keeps your tasks/notes
+sudo apt purge  pokus-focus           # also wipes your data
+```
+
+---
+
+## Install — `.AppImage` (portable, no install)
+
+For non-Debian systems or when you don't want to install anything:
+
+```bash
+chmod +x pokusFocus_0.1.0_amd64.AppImage
+./pokusFocus_0.1.0_amd64.AppImage
+```
+
+Self-contained binary. Drop it anywhere, double-click or run from terminal.
+
+---
+
 ## Features
 
 - Pomodoro timer with configurable focus / short break / long break
 - Coordinated micro-breaks (Stretchly-style 20 s eye-rest), suppressed during pomodoro breaks
-- Task list with pomodoro count, drag-drop reorder, auto-check + auto-advance
-- Markdown notes per task with interactive checkboxes and expand-to-modal
+- Task list with pomodoro count, drag-drop reorder, auto-check + auto-advance to next task
+- Markdown notes per task with interactive checkboxes and expand-to-modal editor
 - System tray with live countdown, hide-on-close, autostart on login
-- Fullscreen overlay for breaks with postpone / skip
+- Fullscreen break overlay with postpone / skip
 - Six accent palettes (Crimson · Mist · Forest · Plum · Amber · Slate)
-- Keyboard shortcuts: Space (start/pause), Ctrl+N (skip), Esc and P in overlay
 - 4 synthesized chime styles with volume + repeat
 - Strict mode, pre-break notifications
 - Local-only — no login, no cloud sync
 
-## Install
+## Keyboard shortcuts
 
-```bash
-sudo apt install ./pokus-focus_0.1.0_amd64.deb
-```
+| Action | Shortcut |
+|---|---|
+| Start / Pause | `Space` |
+| Skip phase | `Ctrl+N` |
+| Reset | `Ctrl+R` |
+| Skip break (in overlay) | `Esc` |
+| Postpone break (in overlay) | `P` |
+| Save edit (tasks) | `Enter` |
+| Cancel edit (tasks) | `Esc` |
 
-Or run the `.AppImage` directly, no install needed.
+---
 
 ## Build from source
 
-Linux deps:
+Required: Node 20+, Rust 1.77+, and Linux dev deps:
 
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev patchelf libxdo-dev
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+                 patchelf libxdo-dev librsvg2-dev
 ```
 
 Then:
 
 ```bash
+git clone git@github.com:jayounghoyos/pocusFocus.git
+cd pocusFocus
 npm install
 npm run tauri dev       # development with HMR
-npm run tauri build     # release bundle in src-tauri/target/release/bundle/
+npm run tauri build     # produces .deb + .AppImage in src-tauri/target/release/bundle/
 ```
 
-Requires Node 20+ and Rust 1.77+.
+Generated artifacts:
 
-## Data
+```
+src-tauri/target/release/bundle/deb/pokusFocus_0.1.0_amd64.deb
+src-tauri/target/release/bundle/appimage/pokusFocus_0.1.0_amd64.AppImage
+```
 
-All state is local, in `~/.local/share/com.jayoungh.pokusfocus/`. To share between machines, symlink that folder into Dropbox / Syncthing / Nextcloud — no code change needed.
+---
 
-## Stack
+## Data location
 
-Tauri 2 (Rust) + React + TypeScript + Tailwind. ~10 MB binary, ~50 MB idle RAM.
+All state — tasks, notes, settings, active task, theme — lives in a SQLite database at:
+
+```
+~/.local/share/com.jayoungh.pokusfocus/
+```
+
+Survives reboots and `apt remove`. Only `apt purge` deletes it.
+
+To share state between machines, symlink that folder into Dropbox / Syncthing / Nextcloud. No code change needed, no servers involved.

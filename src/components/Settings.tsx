@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { SchedulerConfig, DEFAULT_CONFIG } from "../lib/config";
 import { Theme, THEMES } from "../lib/theme";
 import { ChimeStyle, playChime } from "../lib/sound";
+import { useTasks } from "../lib/tasks";
 
 const CHIME_OPTIONS: { value: ChimeStyle; label: string }[] = [
   { value: "soft", label: "Soft" },
@@ -192,6 +193,7 @@ export function Settings({ config, onChange, theme, onThemeChange, onClose }: Pr
               checked={config.auto_check_tasks}
               onChange={(v) => update("auto_check_tasks", v)}
             />
+            <TaskCleanup />
           </Section>
 
           <Section title="Warnings">
@@ -338,6 +340,48 @@ function NumberRow({
         </button>
       </div>
     </label>
+  );
+}
+
+function TaskCleanup() {
+  const { tasks, removeWhere } = useTasks();
+  const [confirmAll, setConfirmAll] = useState(false);
+  const doneCount = tasks.filter((t) => t.completed).length;
+
+  return (
+    <div className="flex flex-wrap gap-2 pt-1">
+      <button
+        className="btn-ghost text-xs border border-zinc-800"
+        disabled={doneCount === 0}
+        onClick={() => removeWhere((t) => t.completed)}
+      >
+        Clear completed{doneCount > 0 && ` (${doneCount})`}
+      </button>
+      {!confirmAll ? (
+        <button
+          className="btn-ghost text-xs border border-zinc-800 text-red-400/80"
+          disabled={tasks.length === 0}
+          onClick={() => setConfirmAll(true)}
+        >
+          Clear all tasks
+        </button>
+      ) : (
+        <span className="flex items-center gap-2">
+          <button
+            className="btn-ghost text-xs border border-red-500/40 text-red-300"
+            onClick={() => {
+              removeWhere(() => true);
+              setConfirmAll(false);
+            }}
+          >
+            Confirm — delete {tasks.length}
+          </button>
+          <button className="btn-ghost text-xs" onClick={() => setConfirmAll(false)}>
+            Cancel
+          </button>
+        </span>
+      )}
+    </div>
   );
 }
 

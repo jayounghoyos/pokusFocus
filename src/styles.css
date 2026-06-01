@@ -4,6 +4,9 @@
 
 @layer base {
   html, body, #root { height: 100%; }
+  /* Tell the webview to render native controls (select dropdowns, option
+     lists, scrollbars) in dark mode — fixes white-on-white select menus. */
+  :root { color-scheme: dark; }
   body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
 
   /* default = crimson */

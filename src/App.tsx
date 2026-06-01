@@ -4,10 +4,14 @@ import { listen } from "@tauri-apps/api/event";
 import { BreakOverlay } from "./components/BreakOverlay";
 import { MicroToast } from "./components/MicroToast";
 import { TaskList } from "./components/TaskList";
+import { WeekView } from "./components/WeekView";
 import { Settings } from "./components/Settings";
 import { useConfig } from "./lib/config";
 import { useTheme } from "./lib/theme";
 import { playChime } from "./lib/sound";
+import { TasksProvider, useTasks } from "./lib/tasks";
+import { todayTasks, scheduledTodayTasks, backlogTasks } from "./lib/scheduling";
+import { todayISO } from "./lib/dates";
 
 type Phase = "Work" | "ShortBreak" | "LongBreak" | "MicroBreak" | "Idle";
 
@@ -21,6 +25,7 @@ interface TickEvent {
 interface PhaseEndEvent {
   ended: Phase;
   started: Phase;
+  is_postponed: boolean;
 }
 
 const phaseColor: Record<Phase, string> = {
@@ -45,6 +50,20 @@ function fmt(sec: number): string {
   return `${m}:${s}`;
 }
 
+type Tab = "today" | "week";
+
+/** Materializes today's recurring-template instances. Runs on every task change
+ *  and when the day rolls over — idempotent via a persistent register, so
+ *  marking a task "repeat" shows its instance immediately, while deleting an
+ *  instance does NOT regenerate it (its key stays registered). */
+function useRecurrenceMaterialization() {
+  const { tasks, materialize } = useTasks();
+  const day = todayISO();
+  useEffect(() => {
+    materialize(tasks);
+  }, [tasks, day, materialize]);
+}
+
 function Dashboard() {
   const [state, setState] = useState<TickEvent>({
     phase: "Idle",
@@ -54,20 +73,22 @@ function Dashboard() {
   });
   const [running, setRunning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [tab, setTab] = useState<Tab>("today");
   const [config, setConfig] = useConfig();
   const [theme, setTheme] = useTheme();
+  const { tasks, incrementActivePomo } = useTasks();
+
+  useRecurrenceMaterialization();
 
   useEffect(() => {
-    const unlisten = listen<TickEvent>("scheduler://tick", (e) => {
-      setState(e.payload);
-    });
+    const unlisten = listen<TickEvent>("scheduler://tick", (e) => setState(e.payload));
     return () => {
       unlisten.then((fn) => fn());
     };
   }, []);
 
   useEffect(() => {
-    const unlisten = listen<PhaseEndEvent>("scheduler://phase-end", () => {
+    const unlisten = listen<PhaseEndEvent>("scheduler://phase-end", (e) => {
       if (config.sound_enabled) {
         playChime({
           style: config.chime_style,
@@ -75,11 +96,14 @@ function Dashboard() {
           repeat: config.chime_repeat,
         });
       }
+      if (e.payload.ended === "Work" && !e.payload.is_postponed) {
+        incrementActivePomo(config.auto_check_tasks);
+      }
     });
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [config.sound_enabled, config.chime_style, config.chime_volume, config.chime_repeat]);
+  }, [config.sound_enabled, config.chime_style, config.chime_volume, config.chime_repeat, config.auto_check_tasks, incrementActivePomo]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -109,83 +133,95 @@ function Dashboard() {
     return () => window.removeEventListener("keydown", onKey);
   }, [running]);
 
-  const progress = state.total_secs > 0
-    ? 1 - state.remaining_secs / state.total_secs
-    : 0;
+  const progress = state.total_secs > 0 ? 1 - state.remaining_secs / state.total_secs : 0;
+  const todayCount = todayTasks(tasks).filter((t) => !t.completed).length;
 
   return (
-    <main className="h-full flex flex-col items-center justify-center gap-10 py-10 relative">
-      <button
-        onClick={() => setShowSettings(true)}
-        className="absolute top-3 right-3 text-zinc-500 hover:text-zinc-200 transition-colors"
-        aria-label="Settings"
-        title="Settings"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-      </button>
+    <main className="h-full flex flex-col relative">
+      {/* Top bar: tabs + settings */}
+      <div className="flex items-center justify-between px-4 pt-3 pb-1">
+        <div className="flex gap-1 bg-zinc-900/60 rounded-lg p-0.5">
+          <TabButton active={tab === "today"} onClick={() => setTab("today")}>
+            Today{todayCount > 0 && <span className="ml-1 text-zinc-500">{todayCount}</span>}
+          </TabButton>
+          <TabButton active={tab === "week"} onClick={() => setTab("week")}>
+            Week
+          </TabButton>
+        </div>
+        <button
+          onClick={() => setShowSettings(true)}
+          className="text-zinc-500 hover:text-zinc-200 transition-colors"
+          aria-label="Settings"
+          title="Settings"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+      </div>
 
-      <section className="flex flex-col items-center">
-        <p className="text-sm uppercase tracking-[0.22em] text-zinc-500 mb-3 transition-colors duration-500">
-          {phaseLabel[state.phase]}
-        </p>
-        <p className="text-8xl font-light tabular-nums tracking-tight">
-          {fmt(state.remaining_secs)}
-        </p>
+      {tab === "today" ? (
+        <div className="flex-1 overflow-y-auto flex flex-col items-center gap-8 py-6">
+          <section className="flex flex-col items-center">
+            <p className="text-sm uppercase tracking-[0.22em] text-zinc-500 mb-3 transition-colors duration-500">
+              {phaseLabel[state.phase]}
+            </p>
+            <p className="text-8xl font-light tabular-nums tracking-tight">
+              {fmt(state.remaining_secs)}
+            </p>
+            <div className="w-80 mt-7 h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+              <div
+                className={`h-full ${phaseColor[state.phase]} transition-all duration-1000 ease-linear`}
+                style={{ width: `${progress * 100}%` }}
+              />
+            </div>
+            <div className="mt-7 flex gap-2">
+              {!running ? (
+                <button className="btn-primary" onClick={async () => { await invoke("scheduler_start"); setRunning(true); }}>
+                  Start
+                </button>
+              ) : (
+                <button className="btn-ghost" onClick={async () => { await invoke("scheduler_pause"); setRunning(false); }}>
+                  Pause
+                </button>
+              )}
+              <button
+                className="btn-ghost"
+                disabled={config.strict_mode && (state.phase === "ShortBreak" || state.phase === "LongBreak")}
+                onClick={async () => { await invoke("scheduler_skip"); }}
+              >
+                Skip
+              </button>
+              <button className="btn-ghost" onClick={async () => { await invoke("scheduler_reset"); setRunning(false); }}>
+                Reset
+              </button>
+            </div>
+          </section>
 
-        <div className="w-80 mt-7 h-1.5 bg-zinc-900 rounded-full overflow-hidden">
-          <div
-            className={`h-full ${phaseColor[state.phase]} transition-all duration-1000 ease-linear`}
-            style={{ width: `${progress * 100}%` }}
+          <div className="w-full max-w-md mx-auto px-4 space-y-1">
+            <SectionLabel>Scheduled today</SectionLabel>
+          </div>
+          <TaskList
+            filter={(t) => scheduledTodayTasks(tasks).some((x) => x.id === t.id)}
+            newTaskDefaults={() => ({ date: todayISO() })}
+            sort={(a, b) => (a.startMin ?? Infinity) - (b.startMin ?? Infinity)}
+            emptyHint="Nothing scheduled for today. Plan your week in the Week tab, or add below."
+          />
+
+          <div className="w-full max-w-md mx-auto px-4 space-y-1 mt-4">
+            <SectionLabel>Tasks</SectionLabel>
+          </div>
+          <TaskList
+            filter={(t) => backlogTasks(tasks).some((x) => x.id === t.id)}
+            emptyHint="Loose tasks with no day go here."
           />
         </div>
-
-        <div className="mt-7 flex gap-2">
-          {!running ? (
-            <button
-              className="btn-primary"
-              onClick={async () => {
-                await invoke("scheduler_start");
-                setRunning(true);
-              }}
-            >
-              Start
-            </button>
-          ) : (
-            <button
-              className="btn-ghost"
-              onClick={async () => {
-                await invoke("scheduler_pause");
-                setRunning(false);
-              }}
-            >
-              Pause
-            </button>
-          )}
-          <button
-            className="btn-ghost"
-            disabled={config.strict_mode && (state.phase === "ShortBreak" || state.phase === "LongBreak")}
-            onClick={async () => {
-              await invoke("scheduler_skip");
-            }}
-          >
-            Skip
-          </button>
-          <button
-            className="btn-ghost"
-            onClick={async () => {
-              await invoke("scheduler_reset");
-              setRunning(false);
-            }}
-          >
-            Reset
-          </button>
+      ) : (
+        <div className="flex-1 min-h-0">
+          <WeekView />
         </div>
-      </section>
-
-      <TaskList autoCheck={config.auto_check_tasks} />
+      )}
 
       {showSettings && (
         <Settings
@@ -200,10 +236,40 @@ function Dashboard() {
   );
 }
 
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={clsxTab(active)}
+    >
+      {children}
+    </button>
+  );
+}
+
+function clsxTab(active: boolean): string {
+  return [
+    "px-3 py-1 rounded-md text-sm font-medium transition-colors",
+    active ? "bg-zinc-100 text-zinc-900" : "text-zinc-400 hover:text-zinc-100",
+  ].join(" ");
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-600 border-b border-zinc-800/60 pb-1">
+      {children}
+    </p>
+  );
+}
+
 export function App() {
   const route = window.location.hash.replace(/^#\/?/, "");
 
   if (route === "overlay") return <BreakOverlay />;
   if (route === "toast") return <MicroToast />;
-  return <Dashboard />;
+  return (
+    <TasksProvider>
+      <Dashboard />
+    </TasksProvider>
+  );
 }

@@ -1,60 +1,24 @@
-import { useEffect, useState, FormEvent, KeyboardEvent } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useState, FormEvent, KeyboardEvent } from "react";
 import clsx from "clsx";
 import { Check } from "./Check";
 import { NotesEditor } from "./NotesEditor";
+import { Task, useTasks } from "../lib/tasks";
+import { minToLabel } from "../lib/dates";
 
-interface LegacyChecklistItem {
-  id: string;
-  text: string;
-  done: boolean;
+interface Props {
+  /** Which tasks this list shows. Defaults to all. */
+  filter?: (t: Task) => boolean;
+  /** Optional ordering applied to visible tasks (e.g. by start time). */
+  sort?: (a: Task, b: Task) => number;
+  /** Shown when the form adds a task — lets Today inject today's date. */
+  newTaskDefaults?: () => Partial<Task>;
+  emptyHint?: string;
 }
 
-interface Task {
-  id: string;
-  title: string;
-  estPomos: number;
-  donePomos: number;
-  completed: boolean;
-  notes?: string;
-  /** Legacy field — migrated into notes as markdown checkboxes. */
-  checklist?: LegacyChecklistItem[];
-}
+export function TaskList({ filter, sort, newTaskDefaults, emptyHint }: Props) {
+  const { tasks, activeId, setActiveId, addTask, updateTask, removeTask, reorder } =
+    useTasks();
 
-interface PhaseEndEvent {
-  ended: "Work" | "ShortBreak" | "LongBreak" | "Idle" | "MicroBreak";
-  started: "Work" | "ShortBreak" | "LongBreak" | "Idle" | "MicroBreak";
-  is_postponed: boolean;
-}
-
-const STORAGE_KEY = "pokusfocus.tasks.v1";
-const ACTIVE_KEY = "pokusfocus.tasks.active.v1";
-
-function migrateTask(t: Task): Task {
-  if (!t.checklist || t.checklist.length === 0) return t;
-  const md = t.checklist
-    .map((it) => `- [${it.done ? "x" : " "}] ${it.text}`)
-    .join("\n");
-  const combined = t.notes ? `${t.notes.replace(/\s+$/, "")}\n\n${md}` : md;
-  return { ...t, notes: combined, checklist: undefined };
-}
-
-function loadTasks(): Task[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as Task[];
-    return raw.map(migrateTask);
-  } catch {
-    return [];
-  }
-}
-
-function loadActiveId(): string | null {
-  return localStorage.getItem(ACTIVE_KEY);
-}
-
-export function TaskList({ autoCheck }: { autoCheck: boolean }) {
-  const [tasks, setTasks] = useState<Task[]>(loadTasks);
-  const [activeId, setActiveId] = useState<string | null>(loadActiveId);
   const [title, setTitle] = useState("");
   const [est, setEst] = useState(1);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -64,117 +28,44 @@ export function TaskList({ autoCheck }: { autoCheck: boolean }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
-  }, [tasks]);
+  const filtered = filter ? tasks.filter(filter) : tasks;
+  const visible = sort ? [...filtered].sort(sort) : filtered;
 
-  useEffect(() => {
-    if (activeId) localStorage.setItem(ACTIVE_KEY, activeId);
-    else localStorage.removeItem(ACTIVE_KEY);
-  }, [activeId]);
-
-  useEffect(() => {
-    const unlisten = listen<PhaseEndEvent>("scheduler://phase-end", (e) => {
-      if (e.payload.ended !== "Work" || e.payload.is_postponed || !activeId) return;
-      setTasks((prev) => {
-        const updated = prev.map((t) =>
-          t.id === activeId ? { ...t, donePomos: t.donePomos + 1 } : t,
-        );
-        const active = updated.find((t) => t.id === activeId);
-        if (autoCheck && active && active.donePomos >= active.estPomos) {
-          const checked = updated.map((t) =>
-            t.id === activeId ? { ...t, completed: true } : t,
-          );
-          const next = checked.find((t) => !t.completed && t.id !== activeId);
-          setActiveId(next?.id ?? null);
-          return checked;
-        }
-        return updated;
-      });
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [activeId, autoCheck]);
-
-  const addTask = (e: FormEvent) => {
+  const onAdd = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = title.trim();
     if (!trimmed) return;
-    const task: Task = {
-      id: crypto.randomUUID(),
+    addTask({
       title: trimmed,
       estPomos: Math.max(1, est | 0),
-      donePomos: 0,
-      completed: false,
-    };
-    setTasks((p) => [...p, task]);
-    if (!activeId) setActiveId(task.id);
+      ...(newTaskDefaults ? newTaskDefaults() : {}),
+    });
     setTitle("");
     setEst(1);
   };
 
-  const toggleDone = (id: string) =>
-    setTasks((p) =>
-      p.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)),
-    );
-
-  const removeTask = (id: string) => {
-    setTasks((p) => p.filter((t) => t.id !== id));
-    if (activeId === id) {
-      const next = tasks.find((t) => t.id !== id && !t.completed);
-      setActiveId(next?.id ?? null);
-    }
-    if (expandedId === id) setExpandedId(null);
+  const startEdit = (t: Task) => {
+    setEditingId(t.id);
+    setEditTitle(t.title);
+    setEditEst(t.estPomos);
   };
-
-  const startEdit = (task: Task) => {
-    setEditingId(task.id);
-    setEditTitle(task.title);
-    setEditEst(task.estPomos);
-  };
-
   const saveEdit = () => {
     if (!editingId) return;
-    const trimmed = editTitle.trim();
-    const nextEst = Math.max(1, Math.min(99, editEst | 0));
-    setTasks((p) =>
-      p.map((t) =>
-        t.id === editingId
-          ? { ...t, title: trimmed || t.title, estPomos: nextEst }
-          : t,
-      ),
-    );
+    updateTask(editingId, {
+      title: editTitle.trim() || undefined,
+      estPomos: Math.max(1, Math.min(99, editEst | 0)),
+    });
     setEditingId(null);
   };
-
-  const cancelEdit = () => setEditingId(null);
-
   const onEditKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") saveEdit();
-    if (e.key === "Escape") cancelEdit();
+    if (e.key === "Escape") setEditingId(null);
   };
 
-  const moveTask = (fromId: string, toId: string) => {
-    if (fromId === toId) return;
-    setTasks((prev) => {
-      const fromIdx = prev.findIndex((t) => t.id === fromId);
-      const toIdx = prev.findIndex((t) => t.id === toId);
-      if (fromIdx < 0 || toIdx < 0) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(fromIdx, 1);
-      next.splice(toIdx, 0, moved);
-      return next;
-    });
-  };
+  const pending = visible.filter((t) => !t.completed);
+  const done = visible.filter((t) => t.completed);
 
-  const updateNotes = (id: string, notes: string) =>
-    setTasks((p) => p.map((t) => (t.id === id ? { ...t, notes } : t)));
-
-  const pending = tasks.filter((t) => !t.completed);
-  const done = tasks.filter((t) => t.completed);
-
-  const renderRow = (t: Task, draggable: boolean) => (
+  const row = (t: Task, draggable: boolean) => (
     <TaskRow
       key={t.id}
       task={t}
@@ -188,13 +79,14 @@ export function TaskList({ autoCheck }: { autoCheck: boolean }) {
       onEditKey={onEditKey}
       onEditSave={saveEdit}
       onStartEdit={() => startEdit(t)}
-      onToggle={() => toggleDone(t.id)}
-      onRemove={() => removeTask(t.id)}
+      onToggle={() => updateTask(t.id, { completed: !t.completed })}
+      onRemove={() => {
+        removeTask(t.id);
+        if (expandedId === t.id) setExpandedId(null);
+      }}
       onActivate={() => setActiveId(t.id)}
-      onToggleExpand={() =>
-        setExpandedId((cur) => (cur === t.id ? null : t.id))
-      }
-      onNotesChange={(v) => updateNotes(t.id, v)}
+      onToggleExpand={() => setExpandedId((c) => (c === t.id ? null : t.id))}
+      onNotesChange={(v) => updateTask(t.id, { notes: v })}
       isDragging={dragId === t.id}
       isDropTarget={dropId === t.id && dragId !== t.id}
       onDragStart={() => setDragId(t.id)}
@@ -204,7 +96,7 @@ export function TaskList({ autoCheck }: { autoCheck: boolean }) {
         setDropId(null);
       }}
       onDrop={() => {
-        if (dragId) moveTask(dragId, t.id);
+        if (dragId) reorder(dragId, t.id);
         setDragId(null);
         setDropId(null);
       }}
@@ -214,7 +106,7 @@ export function TaskList({ autoCheck }: { autoCheck: boolean }) {
 
   return (
     <div className="w-full max-w-md mx-auto px-4">
-      <form onSubmit={addTask} className="flex gap-2 mb-3">
+      <form onSubmit={onAdd} className="flex gap-2 mb-3">
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -237,20 +129,22 @@ export function TaskList({ autoCheck }: { autoCheck: boolean }) {
         <button type="submit" className="btn-primary">+</button>
       </form>
 
+      {visible.length === 0 && emptyHint && (
+        <p className="text-center text-sm text-zinc-600 py-6">{emptyHint}</p>
+      )}
+
       <ul className="space-y-1">
-        {pending.map((t) => renderRow(t, true))}
+        {pending.map((t) => row(t, true))}
         {done.length > 0 && pending.length > 0 && (
-          <li className="pt-2 text-[10px] uppercase tracking-wider text-zinc-600">
-            done
-          </li>
+          <li className="pt-2 text-[10px] uppercase tracking-wider text-zinc-600">done</li>
         )}
-        {done.map((t) => renderRow(t, false))}
+        {done.map((t) => row(t, false))}
       </ul>
     </div>
   );
 }
 
-interface TaskRowProps {
+interface RowProps {
   task: Task;
   isActive: boolean;
   isExpanded: boolean;
@@ -276,7 +170,7 @@ interface TaskRowProps {
   draggable?: boolean;
 }
 
-function TaskRow(props: TaskRowProps) {
+function TaskRow(props: RowProps) {
   const {
     task, isActive, isExpanded, isEditing,
     editTitle, setEditTitle, editEst, setEditEst,
@@ -285,6 +179,13 @@ function TaskRow(props: TaskRowProps) {
     isDragging, isDropTarget, onDragStart, onDragOver, onDragEnd, onDrop,
     draggable = true,
   } = props;
+
+  const timeLabel =
+    task.startMin != null
+      ? task.endMin != null
+        ? `${minToLabel(task.startMin)}–${minToLabel(task.endMin)}`
+        : minToLabel(task.startMin)
+      : null;
 
   return (
     <li>
@@ -336,6 +237,13 @@ function TaskRow(props: TaskRowProps) {
         >
           {isExpanded ? "▼" : "▶"}
         </button>
+        {task.color && (
+          <span
+            className="h-3 w-1 rounded-full flex-shrink-0"
+            style={{ backgroundColor: task.color }}
+            aria-hidden
+          />
+        )}
         <Check
           checked={task.completed}
           onChange={onToggle}
@@ -357,18 +265,13 @@ function TaskRow(props: TaskRowProps) {
               min={1}
               max={99}
               value={editEst}
-              onChange={(e) =>
-                setEditEst(Math.max(1, parseInt(e.target.value, 10) || 1))
-              }
+              onChange={(e) => setEditEst(Math.max(1, parseInt(e.target.value, 10) || 1))}
               onKeyDown={onEditKey}
               className="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-base text-center tabular-nums
                          focus:outline-none focus:border-zinc-500"
               aria-label="Estimated pomodoros"
             />
-            <button
-              onClick={onEditSave}
-              className="text-zinc-400 hover:text-zinc-100 text-xs px-2"
-            >
+            <button onClick={onEditSave} className="text-zinc-400 hover:text-zinc-100 text-xs px-2">
               save
             </button>
           </>
@@ -383,9 +286,12 @@ function TaskRow(props: TaskRowProps) {
                 isActive && "text-zinc-100",
                 !isActive && !task.completed && "text-zinc-300 hover:text-zinc-100",
               )}
-              title="Click to activate · Double-click to edit · Drag to reorder"
+              title="Click to activate · Double-click to edit"
             >
               {task.title}
+              {timeLabel && (
+                <span className="ml-2 text-xs text-zinc-500 tabular-nums">{timeLabel}</span>
+              )}
             </button>
             <button
               onClick={onStartEdit}
@@ -407,10 +313,7 @@ function TaskRow(props: TaskRowProps) {
 
       {isExpanded && (
         <div className="ml-12 mt-1.5 mr-2 mb-2 rounded-lg bg-zinc-900/40 border border-zinc-800/60 overflow-hidden animate-fade-in">
-          <NotesEditor
-            value={task.notes ?? ""}
-            onChange={onNotesChange}
-          />
+          <NotesEditor value={task.notes ?? ""} onChange={onNotesChange} />
         </div>
       )}
     </li>

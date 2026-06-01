@@ -17,15 +17,15 @@ sudo apt install -y libwebkit2gtk-4.1-0 libayatana-appindicator3-1
 
 ### 2. Get the `.deb`
 
-Either grab `pokusFocus_0.1.0_amd64.deb` from a release, or build it locally (see [Build from source](#build-from-source)).
+Either grab `pokusFocus_0.2.0_amd64.deb` from a release, or build it locally (see [Build from source](#build-from-source)).
 
 ### 3. Install it
 
 Copy to `/tmp/` first so apt doesn't complain about sandbox permissions, then install:
 
 ```bash
-cp pokusFocus_0.1.0_amd64.deb /tmp/
-sudo apt install /tmp/pokusFocus_0.1.0_amd64.deb
+cp pokusFocus_0.2.0_amd64.deb /tmp/
+sudo apt install /tmp/pokusFocus_0.2.0_amd64.deb
 ```
 
 ### 4. Launch
@@ -46,8 +46,8 @@ sudo apt purge  pokus-focus           # also wipes your data
 For non-Debian systems or when you don't want to install anything:
 
 ```bash
-chmod +x pokusFocus_0.1.0_amd64.AppImage
-./pokusFocus_0.1.0_amd64.AppImage
+chmod +x pokusFocus_0.2.0_amd64.AppImage
+./pokusFocus_0.2.0_amd64.AppImage
 ```
 
 Self-contained binary. Drop it anywhere, double-click or run from terminal.
@@ -58,6 +58,10 @@ Self-contained binary. Drop it anywhere, double-click or run from terminal.
 
 - Pomodoro timer with configurable focus / short break / long break
 - Coordinated micro-breaks (Stretchly-style 20 s eye-rest), suppressed during pomodoro breaks
+- **Today / Week tabs** — execute today, plan the whole week
+- **Week calendar** — Google-Calendar-style 7-day × 24h grid; click a slot to add a task, drag-free block editor with time, color, and overlap control
+- **Recurring tasks** — repeat on chosen weekdays; each day gets its own independent instance that appears in Today when the day arrives
+- Today splits into *Scheduled today* (from the calendar) and *Tasks* (loose undated backlog)
 - Task list with pomodoro count, drag-drop reorder, auto-check + auto-advance to next task
 - Markdown notes per task with interactive checkboxes and expand-to-modal editor
 - System tray with live countdown, hide-on-close, autostart on login
@@ -103,8 +107,8 @@ npm run tauri build     # produces .deb + .AppImage in src-tauri/target/release/
 Generated artifacts:
 
 ```
-src-tauri/target/release/bundle/deb/pokusFocus_0.1.0_amd64.deb
-src-tauri/target/release/bundle/appimage/pokusFocus_0.1.0_amd64.AppImage
+src-tauri/target/release/bundle/deb/pokusFocus_0.2.0_amd64.deb
+src-tauri/target/release/bundle/appimage/pokusFocus_0.2.0_amd64.AppImage
 ```
 
 ---

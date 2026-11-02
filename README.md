@@ -96,13 +96,20 @@ sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
 Then:
 
 ```bash
-git clone git@github.com:jayounghoyos/pocusFocus.git
-cd pocusFocus
+git clone git@github.com:jayounghoyos/pokusFocus.git
+cd pokusFocus
 npm install
 npm run tauri dev       # development with HMR (its data is separate from the installed app's)
 npx vite                # UI only, in a browser, with a simulated scheduler; add ?demo for sample data
 npm run tauri build     # produces .deb + .AppImage in src-tauri/target/release/bundle/
 ```
+
+> **AppImage on Ubuntu 24.04+:** GTK's helper moved to `libgtk-3-0t64/`, which linuxdeploy's GTK
+> plugin doesn't look in. Put it on `PATH` for the build:
+>
+> ```bash
+> PATH="/usr/lib/x86_64-linux-gnu/libgtk-3-0t64:$PATH" NO_STRIP=true npm run tauri build
+> ```
 
 Generated artifacts:
 

@@ -1,275 +1,210 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { ReactNode, useEffect, useRef, useState } from "react";
+import clsx from "clsx";
 import { BreakOverlay } from "./components/BreakOverlay";
 import { MicroToast } from "./components/MicroToast";
-import { TaskList } from "./components/TaskList";
+import { TodayView } from "./components/TodayView";
 import { WeekView } from "./components/WeekView";
-import { Settings } from "./components/Settings";
-import { useConfig } from "./lib/config";
-import { useTheme } from "./lib/theme";
+import { SettingsView } from "./components/SettingsView";
+import { Icon, Mark } from "./components/ui";
+import { SchedulerConfig, useConfig } from "./lib/config";
+import { useAppearance } from "./lib/theme";
 import { playChime } from "./lib/sound";
 import { TasksProvider, useTasks } from "./lib/tasks";
-import { todayTasks, scheduledTodayTasks, backlogTasks } from "./lib/scheduling";
-import { todayISO } from "./lib/dates";
+import { todayTasks } from "./lib/scheduling";
+import { scheduler } from "./lib/ipc";
+import { logSession } from "./lib/history";
+import { toggleRunning, useTick } from "./lib/timer";
+import { clock } from "./lib/format";
+import { PHASE_LABEL } from "./lib/types";
 
-type Phase = "Work" | "ShortBreak" | "LongBreak" | "MicroBreak" | "Idle";
+type Route = "today" | "week" | "settings";
 
-interface TickEvent {
-  phase: Phase;
-  remaining_secs: number;
-  total_secs: number;
-  cycle: number;
+function readRoute(): string {
+  return window.location.hash.replace(/^#\/?/, "") || "today";
 }
 
-interface PhaseEndEvent {
-  ended: Phase;
-  started: Phase;
-  is_postponed: boolean;
-}
-
-const phaseColor: Record<Phase, string> = {
-  Work: "bg-focus-work",
-  ShortBreak: "bg-focus-short",
-  LongBreak: "bg-focus-long",
-  MicroBreak: "bg-focus-micro",
-  Idle: "bg-zinc-700",
-};
-
-const phaseLabel: Record<Phase, string> = {
-  Work: "Focus",
-  ShortBreak: "Short break",
-  LongBreak: "Long break",
-  MicroBreak: "Micro break",
-  Idle: "Idle",
-};
-
-function fmt(sec: number): string {
-  const m = Math.floor(sec / 60).toString().padStart(2, "0");
-  const s = Math.floor(sec % 60).toString().padStart(2, "0");
-  return `${m}:${s}`;
-}
-
-type Tab = "today" | "week";
-
-/** Materializes today's recurring-template instances. Runs on every task change
- *  and when the day rolls over — idempotent via a persistent register, so
- *  marking a task "repeat" shows its instance immediately, while deleting an
- *  instance does NOT regenerate it (its key stays registered). */
-function useRecurrenceMaterialization() {
-  const { tasks, materialize } = useTasks();
-  const day = todayISO();
+function useRoute(): [Route, (r: Route) => void] {
+  const [raw, setRaw] = useState(readRoute);
   useEffect(() => {
-    materialize(tasks);
-  }, [tasks, day, materialize]);
+    const on = () => setRaw(readRoute());
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  const route: Route = raw === "week" || raw === "settings" ? raw : "today";
+  return [route, (r) => { window.location.hash = `/${r}`; }];
 }
 
-function Dashboard() {
-  const [state, setState] = useState<TickEvent>({
-    phase: "Idle",
-    remaining_secs: 25 * 60,
-    total_secs: 25 * 60,
-    cycle: 0,
-  });
-  const [running, setRunning] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [tab, setTab] = useState<Tab>("today");
-  const [config, setConfig] = useConfig();
-  const [theme, setTheme] = useTheme();
-  const { tasks, incrementActivePomo } = useTasks();
-
-  useRecurrenceMaterialization();
+/** Everything that reacts to the scheduler outside of rendering: the chime,
+ *  the session log and crediting the active task. Listeners subscribe once and
+ *  read the latest config/active task through refs. */
+function useSessionEffects(config: SchedulerConfig) {
+  const { activeId, incrementActivePomo } = useTasks();
+  const cfg = useRef(config);
+  cfg.current = config;
+  const active = useRef(activeId);
+  active.current = activeId;
+  const credit = useRef(incrementActivePomo);
+  credit.current = incrementActivePomo;
 
   useEffect(() => {
-    const unlisten = listen<TickEvent>("scheduler://tick", (e) => setState(e.payload));
-    return () => {
-      unlisten.then((fn) => fn());
-    };
+    const offEnd = scheduler.onPhaseEnd((e) => {
+      const c = cfg.current;
+      if (c.sound_enabled) {
+        playChime({ style: c.chime_style, volume: c.chime_volume, repeat: c.chime_repeat });
+      }
+      if (e.ended !== "Idle" && e.ended !== "MicroBreak") {
+        logSession({
+          phase: e.ended,
+          secs: e.elapsed_secs,
+          taskId: e.ended === "Work" ? active.current : null,
+          skipped: e.skipped || e.is_postponed,
+        });
+      }
+      // Only a focus session that ran out earns a pomodoro — not a skip.
+      if (e.ended === "Work" && !e.is_postponed && !e.skipped) {
+        credit.current(c.auto_check_tasks);
+      }
+    });
+    const offMicro = scheduler.onMicroEnd(() => {
+      logSession({ phase: "MicroBreak", secs: cfg.current.micro_break_duration_secs, skipped: false });
+    });
+    return () => { offEnd(); offMicro(); };
   }, []);
 
   useEffect(() => {
-    const unlisten = listen<PhaseEndEvent>("scheduler://phase-end", (e) => {
-      if (config.sound_enabled) {
-        playChime({
-          style: config.chime_style,
-          volume: config.chime_volume,
-          repeat: config.chime_repeat,
-        });
-      }
-      if (e.payload.ended === "Work" && !e.payload.is_postponed) {
-        incrementActivePomo(config.auto_check_tasks);
-      }
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [config.sound_enabled, config.chime_style, config.chime_volume, config.chime_repeat, config.auto_check_tasks, incrementActivePomo]);
-
-  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName?.toLowerCase();
-      if (tag === "input" || tag === "textarea" || tag === "select") return;
-      if (target?.isContentEditable) return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || t?.isContentEditable) return;
+      if (document.querySelector('[role="dialog"]')) return;
       if (e.code === "Space") {
         e.preventDefault();
-        if (running) {
-          invoke("scheduler_pause");
-          setRunning(false);
-        } else {
-          invoke("scheduler_start");
-          setRunning(true);
-        }
-      } else if (e.key === "r" && (e.ctrlKey || e.metaKey)) {
+        toggleRunning();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") {
         e.preventDefault();
-        invoke("scheduler_reset");
-        setRunning(false);
-      } else if (e.key === "n" && (e.ctrlKey || e.metaKey)) {
+        scheduler.reset();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
         e.preventDefault();
-        invoke("scheduler_skip");
+        scheduler.skip();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [running]);
+  }, []);
+}
 
-  const progress = state.total_secs > 0 ? 1 - state.remaining_secs / state.total_secs : 0;
-  const todayCount = todayTasks(tasks).filter((t) => !t.completed).length;
+const NAV: { route: Route; label: string; icon: (p: { size?: number }) => JSX.Element }[] = [
+  { route: "today", label: "Today", icon: Icon.Today },
+  { route: "week", label: "Week", icon: Icon.Week },
+  { route: "settings", label: "Settings", icon: Icon.Settings },
+];
+
+function Shell() {
+  const [route, go] = useRoute();
+  const [config, setConfig] = useConfig();
+  const [appearance, setAppearance] = useAppearance();
+  const { tasks } = useTasks();
+  useSessionEffects(config);
+
+  const openToday = todayTasks(tasks).filter((t) => !t.completed).length;
 
   return (
-    <main className="h-full flex flex-col relative">
-      {/* Top bar: tabs + settings */}
-      <div className="flex items-center justify-between px-4 pt-3 pb-1">
-        <div className="flex gap-1 bg-zinc-900/60 rounded-lg p-0.5">
-          <TabButton active={tab === "today"} onClick={() => setTab("today")}>
-            Today{todayCount > 0 && <span className="ml-1 text-zinc-500">{todayCount}</span>}
-          </TabButton>
-          <TabButton active={tab === "week"} onClick={() => setTab("week")}>
-            Week
-          </TabButton>
+    <div className="flex h-full">
+      {/* Sidebar — same ground as the page, divided by one rule. Folds below 1024px. */}
+      <aside className="hidden w-[var(--sidebar)] flex-none flex-col border-r border-line lg:flex">
+        <div className="flex h-[var(--topbar)] flex-none items-center gap-2.5 border-b border-line px-[22px]">
+          <Mark />
+          <span className="text-base font-semibold tracking-[-0.01em]">pokusFocus</span>
         </div>
-        <button
-          onClick={() => setShowSettings(true)}
-          className="text-zinc-500 hover:text-zinc-200 transition-colors"
-          aria-label="Settings"
-          title="Settings"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-        </button>
+        <nav aria-label="Main" className="flex flex-1 flex-col gap-0.5 px-3 py-4">
+          {NAV.slice(0, 2).map((n) => (
+            <NavItem key={n.route} active={route === n.route} onClick={() => go(n.route)}
+              icon={<n.icon />} label={n.label}
+              count={n.route === "today" && openToday > 0 ? `${openToday} open` : undefined} />
+          ))}
+          <div className="flex-1" />
+          <NavItem active={route === "settings"} onClick={() => go("settings")}
+            icon={<Icon.Settings />} label="Settings" />
+        </nav>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        {route === "today" && <TodayView config={config} />}
+        {route === "week" && <WeekView />}
+        {route === "settings" && (
+          <SettingsView config={config} onChange={setConfig} appearance={appearance} onAppearanceChange={setAppearance} />
+        )}
+
+        {/* Phone / tablet: the nav becomes a bottom bar of the three destinations. */}
+        <nav aria-label="Main" className="flex h-14 flex-none border-t border-line lg:hidden"
+          style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+          {NAV.map((n) => (
+            <button key={n.route} onClick={() => go(n.route)} aria-current={route === n.route ? "page" : undefined}
+              className={clsx("flex flex-1 flex-col items-center justify-center gap-0.5 text-xs transition-colors",
+                route === n.route ? "text-ink" : "text-faint hover:text-muted")}>
+              <n.icon size={18} />
+              {n.label}
+            </button>
+          ))}
+        </nav>
       </div>
-
-      {tab === "today" ? (
-        <div className="flex-1 overflow-y-auto flex flex-col items-center gap-8 py-6">
-          <section className="flex flex-col items-center">
-            <p className="text-sm uppercase tracking-[0.22em] text-zinc-500 mb-3 transition-colors duration-500">
-              {phaseLabel[state.phase]}
-            </p>
-            <p className="text-8xl font-light tabular-nums tracking-tight">
-              {fmt(state.remaining_secs)}
-            </p>
-            <div className="w-80 mt-7 h-1.5 bg-zinc-900 rounded-full overflow-hidden">
-              <div
-                className={`h-full ${phaseColor[state.phase]} transition-all duration-1000 ease-linear`}
-                style={{ width: `${progress * 100}%` }}
-              />
-            </div>
-            <div className="mt-7 flex gap-2">
-              {!running ? (
-                <button className="btn-primary" onClick={async () => { await invoke("scheduler_start"); setRunning(true); }}>
-                  Start
-                </button>
-              ) : (
-                <button className="btn-ghost" onClick={async () => { await invoke("scheduler_pause"); setRunning(false); }}>
-                  Pause
-                </button>
-              )}
-              <button
-                className="btn-ghost"
-                disabled={config.strict_mode && (state.phase === "ShortBreak" || state.phase === "LongBreak")}
-                onClick={async () => { await invoke("scheduler_skip"); }}
-              >
-                Skip
-              </button>
-              <button className="btn-ghost" onClick={async () => { await invoke("scheduler_reset"); setRunning(false); }}>
-                Reset
-              </button>
-            </div>
-          </section>
-
-          <div className="w-full max-w-md mx-auto px-4 space-y-1">
-            <SectionLabel>Scheduled today</SectionLabel>
-          </div>
-          <TaskList
-            filter={(t) => scheduledTodayTasks(tasks).some((x) => x.id === t.id)}
-            newTaskDefaults={() => ({ date: todayISO() })}
-            sort={(a, b) => (a.startMin ?? Infinity) - (b.startMin ?? Infinity)}
-            emptyHint="Nothing scheduled for today. Plan your week in the Week tab, or add below."
-          />
-
-          <div className="w-full max-w-md mx-auto px-4 space-y-1 mt-4">
-            <SectionLabel>Tasks</SectionLabel>
-          </div>
-          <TaskList
-            filter={(t) => backlogTasks(tasks).some((x) => x.id === t.id)}
-            emptyHint="Loose tasks with no day go here."
-          />
-        </div>
-      ) : (
-        <div className="flex-1 min-h-0">
-          <WeekView />
-        </div>
-      )}
-
-      {showSettings && (
-        <Settings
-          config={config}
-          onChange={setConfig}
-          theme={theme}
-          onThemeChange={setTheme}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
-    </main>
+    </div>
   );
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function NavItem({ active, onClick, icon, label, count }: {
+  active: boolean; onClick: () => void; icon: ReactNode; label: string; count?: string;
+}) {
+  // On dark, the active item is marked by brightness alone (#bbb → #fff).
   return (
-    <button
-      onClick={onClick}
-      className={clsxTab(active)}
-    >
-      {children}
+    <button onClick={onClick} aria-current={active ? "page" : undefined}
+      className={clsx("flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
+        active ? "text-ink" : "text-nav hover:text-ink")}>
+      <span className={active ? "text-ink" : "text-faint"}>{icon}</span>
+      <span className="flex-1 text-left">{label}</span>
+      {count && <span className="num text-xs text-faint">{count}</span>}
     </button>
   );
 }
 
-function clsxTab(active: boolean): string {
-  return [
-    "px-3 py-1 rounded-md text-sm font-medium transition-colors",
-    active ? "bg-zinc-100 text-zinc-900" : "text-zinc-400 hover:text-zinc-100",
-  ].join(" ");
+/** Top bar used by every view: the screen's title on the left, its own
+ *  context on the right. Always carries something real. */
+export function TopBar({ title, sub, children }: { title: ReactNode; sub?: ReactNode; children?: ReactNode }) {
+  return (
+    <header className="flex h-[var(--topbar)] flex-none items-center gap-4 border-b border-line px-4 sm:px-[29px]">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <span className="lg:hidden"><Mark size={20} /></span>
+        <h1 className="truncate text-xl font-semibold tracking-[-0.01em]">{title}</h1>
+        {sub && <span className="hidden truncate text-sm text-muted sm:inline">{sub}</span>}
+      </div>
+      <div className="flex flex-none items-center gap-2">{children}</div>
+    </header>
+  );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+/** The compact live clock for screens other than Today. */
+export function LiveChip() {
+  const t = useTick();
   return (
-    <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-600 border-b border-zinc-800/60 pb-1">
-      {children}
-    </p>
+    <div className="flex items-center gap-3">
+      <span className="hidden text-sm text-muted sm:inline">{PHASE_LABEL[t.phase]}</span>
+      <span className="num text-base font-medium">{clock(t.remaining_secs)}</span>
+      <button className="btn-outline h-8 px-3" onClick={toggleRunning}
+        aria-label={t.running ? "Pause" : "Start"}>
+        {t.running ? <Icon.Pause size={14} /> : <Icon.Play size={14} />}
+        <span className="hidden sm:inline">{t.running ? "Pause" : "Start"}</span>
+      </button>
+    </div>
   );
 }
 
 export function App() {
-  const route = window.location.hash.replace(/^#\/?/, "");
-
+  const route = readRoute();
   if (route === "overlay") return <BreakOverlay />;
   if (route === "toast") return <MicroToast />;
   return (
     <TasksProvider>
-      <Dashboard />
+      <Shell />
     </TasksProvider>
   );
 }

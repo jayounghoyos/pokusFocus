@@ -2,84 +2,131 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Style: true-black-flat (taste-skill seed 211456025), with this product's face:
+ * a warm near-black ground and one data hue (tomato by default) that only ever
+ * marks focus time. Elevation is lightness alone: ground → surface → raised.
+ * No borders or shadows on resting cards; 1px rules divide the shell.
+ */
 @layer base {
-  html, body, #root { height: 100%; }
-  /* Tell the webview to render native controls (select dropdowns, option
-     lists, scrollbars) in dark mode — fixes white-on-white select menus. */
-  :root { color-scheme: dark; }
-  body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+  :root {
+    color-scheme: dark;
+    --ground: 14 13 12;     /* #0e0d0c */
+    --surface: 24 23 22;    /* #181716 */
+    --raised: 42 40 38;     /* #2a2826 */
+    --line: 38 36 34;       /* #262422 — shell rules, row rules */
+    --control: 72 69 66;    /* #484542 — outlines on interactive things */
+    --ink: 255 255 255;
+    --muted: 180 180 180;   /* #b4b4b4 secondary */
+    --faint: 148 148 148;   /* #949494 meta, 4.5:1 on raised */
+    --hue: 255 106 77;      /* tomato — focus data only */
+    --rest: 85 81 77;       /* breaks in the Day strip and cycle preview */
+    --invert: 255 255 255;  /* the primary pill: inverted against the ground */
+    --on-invert: 0 0 0;
+    --nav: 187 187 187;     /* idle nav labels; active goes to full ink */
+    --negative: 229 86 111;
+    --warning: 229 169 59;
 
-  /* default = crimson */
-  :root,
-  :root[data-theme="crimson"] {
-    --c-accent: 220 38 38;
-    --c-short:  16 185 129;
-    --c-long:   59 130 246;
-    --c-micro: 168  85 247;
+    --radius-card: 20px;
+    --radius-inner: 12px;
+    --gap: 14px;
+    --pad: 22px;
+    --control-h: 36px;
+    --sidebar: 210px;
+    --topbar: 64px;
   }
-  :root[data-theme="mist"] {
-    --c-accent:  96 165 250;
-    --c-short:  110 231 183;
-    --c-long:   165 180 252;
-    --c-micro:  244 114 182;
+  /* Background tone — one lightness ladder per temperature. Never navy or slate. */
+  :root[data-ground="neutral"] { --ground: 10 10 10; --surface: 21 21 21; --raised: 40 40 40; --line: 34 34 34; --control: 70 70 70; --rest: 82 82 82; }
+  :root[data-ground="cool"]    { --ground: 12 13 15; --surface: 21 23 26; --raised: 38 41 46; --line: 33 36 40; --control: 66 70 77; --rest: 78 83 92; }
+  :root[data-ground="black"]   { --ground: 0 0 0;    --surface: 17 17 17; --raised: 42 42 42; --line: 26 26 26; --control: 68 68 68; --rest: 80 80 80; }
+
+  /* Light mode — off-white ground, white cards, near-black ink; greys hold 4.5:1.
+     Same move as dark: elevation by tone alone, colour only on focus data. */
+  :root[data-mode="light"] {
+    color-scheme: light;
+    --ground: 244 244 242; --surface: 255 255 255; --raised: 236 235 232;
+    --line: 230 229 226;   --control: 205 204 200; --rest: 196 194 189;
+    --ink: 17 17 17; --muted: 92 90 87; --faint: 107 105 102; --nav: 92 90 87;
+    --invert: 17 17 17; --on-invert: 255 255 255;
+    --negative: 196 36 42; --warning: 146 64 14;
   }
-  :root[data-theme="forest"] {
-    --c-accent:  16 185 129;
-    --c-short:  251 191  36;
-    --c-long:    20 184 166;
-    --c-micro:  167 139 250;
+  :root[data-mode="light"][data-ground="neutral"] { --ground: 246 246 246; --raised: 236 236 236; --line: 230 230 230; --control: 205 205 205; --rest: 196 196 196; }
+  :root[data-mode="light"][data-ground="cool"]    { --ground: 245 247 250; --raised: 234 238 243; --line: 228 232 238; --control: 200 206 214; --rest: 190 197 207; }
+  :root[data-mode="light"][data-ground="black"]   { --ground: 255 255 255; --surface: 246 246 246; --raised: 234 234 234; --line: 232 232 232; --control: 205 205 205; --rest: 196 196 196; }
+
+  :root[data-theme="crimson"] { --hue: 255 106 77; }
+  :root[data-theme="amber"]   { --hue: 242 179 61; }
+  :root[data-theme="forest"]  { --hue: 143 212 94; }
+  :root[data-theme="mist"]    { --hue: 76 179 240; }
+  :root[data-theme="plum"]    { --hue: 240 112 154; }
+  :root[data-theme="slate"]   { --hue: 217 214 208; }
+
+  html, body, #root { height: 100%; }
+  body {
+    background: rgb(var(--ground));
+    color: rgb(var(--ink));
+    font-family: "Inter Variable", "Inter", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 20px;
+    -webkit-font-smoothing: antialiased;
   }
-  :root[data-theme="plum"] {
-    --c-accent: 168  85 247;
-    --c-short:  244 114 182;
-    --c-long:   129 140 248;
-    --c-micro:  234  88  12;
-  }
-  :root[data-theme="amber"] {
-    --c-accent: 245 158  11;
-    --c-short:  132 204  22;
-    --c-long:   234  88  12;
-    --c-micro:  168  85 247;
-  }
-  :root[data-theme="slate"] {
-    --c-accent: 161 161 170;
-    --c-short:  113 113 122;
-    --c-long:    82  82  91;
-    --c-micro:  212 212 216;
-  }
+  ::selection { background: rgb(var(--ink) / 0.25); }
+  :focus-visible { outline: 2px solid rgb(var(--ink)); outline-offset: 2px; }
+  button { -webkit-tap-highlight-color: transparent; }
 
   input[type="number"]::-webkit-inner-spin-button,
-  input[type="number"]::-webkit-outer-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-  input[type="number"] {
-    -moz-appearance: textfield;
-    appearance: textfield;
-  }
+  input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--raised)); border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
 }
 
 @layer components {
+  .num { font-variant-numeric: tabular-nums; }
+
   .btn {
-    @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium
-           transition-colors disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 text-sm font-medium
+           whitespace-nowrap select-none transition-[background-color,color,transform] duration-150
+           active:scale-[0.97] disabled:opacity-40 disabled:pointer-events-none;
+    height: var(--control-h);
   }
-  .btn-primary { @apply btn bg-zinc-100 text-zinc-900 hover:bg-white; }
-  .btn-ghost   { @apply btn bg-transparent text-zinc-300 hover:bg-zinc-800/60; }
+  /* Primary by inversion: a white pill with black text. One per screen. */
+  .btn-primary { @apply btn bg-invert text-on-invert hover:bg-invert/85; }
+  .btn-outline { @apply btn border border-control text-ink hover:bg-raised; }
+  .btn-text    { @apply btn px-2 text-muted hover:text-ink; }
+  .btn-icon {
+    @apply inline-flex items-center justify-center rounded-full text-muted hover:text-ink hover:bg-raised
+           transition-colors duration-150;
+    width: 32px; height: 32px;
+  }
+
+  .panel { background: rgb(var(--surface)); border-radius: var(--radius-card); padding: var(--pad); }
+  .panel-title { @apply text-base font-semibold text-ink; }
+
+  .field {
+    @apply w-full rounded-[10px] border border-control bg-ground px-3 text-sm text-ink
+           placeholder:text-faint focus:outline-none focus:border-muted transition-colors;
+    height: 40px;
+  }
+  .kbd {
+    @apply inline-flex items-center justify-center rounded-md bg-raised px-1.5 text-xs text-muted num;
+    min-width: 24px; height: 22px;
+  }
 }
 
-@keyframes fade-in {
-  from { opacity: 0; transform: translateY(2px); }
-  to   { opacity: 1; transform: translateY(0); }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
 }
-.animate-fade-in {
-  animation: fade-in 0.35s ease-out both;
-}
-
-@keyframes scale-in {
+@keyframes pop {
   from { opacity: 0; transform: scale(0.97); }
-  to   { opacity: 1; transform: scale(1); }
+  to   { opacity: 1; transform: none; }
 }
-.animate-scale-in {
-  animation: scale-in 0.18s ease-out both;
+.animate-rise { animation: rise 0.2s ease-out both; }
+.animate-pop  { animation: pop 0.16s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise, .animate-pop { animation: none; }
+  * { transition-duration: 0.01ms !important; }
 }

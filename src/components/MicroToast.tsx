@@ -1,62 +1,42 @@
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { closeOwnWindow, scheduler } from "../lib/ipc";
+import type { TickEvent } from "../lib/types";
 
-type Phase = "Work" | "ShortBreak" | "LongBreak" | "MicroBreak" | "Idle";
-
-interface TickEvent {
-  phase: Phase;
-  remaining_secs: number;
-  total_secs: number;
-  cycle: number;
-}
-
+/** The water-break card: a small window in the corner, never a full screen. */
 export function MicroToast() {
   const [tick, setTick] = useState<TickEvent | null>(null);
 
   useEffect(() => {
-    const unlisten = listen<TickEvent>("scheduler://tick", (e) => {
-      const t = e.payload;
-      if (t.phase === "MicroBreak") {
-        setTick(t);
-      } else {
-        getCurrentWindow().close().catch(() => {});
-      }
+    // Transparent window: only the card itself paints.
+    document.documentElement.style.background = "transparent";
+    document.body.style.background = "transparent";
+    return scheduler.onTick((t) => {
+      if (t.phase === "MicroBreak") setTick(t);
+      else closeOwnWindow();
     });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
   }, []);
 
   if (!tick) return null;
-
-  const progress = 1 - tick.remaining_secs / tick.total_secs;
-  const circ = 2 * Math.PI * 28;
+  const progress = tick.total_secs ? 1 - tick.remaining_secs / tick.total_secs : 0;
+  const r = 24;
+  const circ = 2 * Math.PI * r;
 
   return (
-    <div className="h-full w-full flex items-center gap-3 px-4
-                    bg-zinc-900/95 backdrop-blur rounded-2xl border border-zinc-800
-                    text-zinc-100 select-none">
-      <svg width="64" height="64" viewBox="0 0 64 64">
-        <circle cx="32" cy="32" r="28" stroke="#27272a" strokeWidth="4" fill="none" />
-        <circle
-          cx="32" cy="32" r="28"
-          stroke="#a855f7" strokeWidth="4" fill="none"
-          strokeDasharray={circ}
-          strokeDashoffset={circ * (1 - progress)}
-          transform="rotate(-90 32 32)"
-          style={{ transition: "stroke-dashoffset 1s linear" }}
-        />
-        <text
-          x="32" y="32" textAnchor="middle" dominantBaseline="central"
-          className="fill-zinc-100 text-base font-medium tabular-nums"
-        >
-          {tick.remaining_secs}
-        </text>
+    <div className="flex h-full w-full select-none items-center gap-3.5 rounded-[20px] bg-surface px-4 text-ink">
+      <svg width="56" height="56" viewBox="0 0 56 56" className="flex-none" aria-hidden>
+        <circle cx="28" cy="28" r={r} stroke="rgb(var(--raised))" strokeWidth="3" fill="none" />
+        <circle cx="28" cy="28" r={r} stroke="rgb(var(--hue))" strokeWidth="3" fill="none" strokeLinecap="round"
+          strokeDasharray={circ} strokeDashoffset={circ * (1 - progress)} transform="rotate(-90 28 28)"
+          style={{ transition: "stroke-dashoffset 1s linear" }} />
+        {/* a glass, filling as the break runs */}
+        <clipPath id="glass"><path d="M21 19h14l-1.6 17.2a2 2 0 0 1-2 1.8h-6.8a2 2 0 0 1-2-1.8z" /></clipPath>
+        <path d="M21 19h14l-1.6 17.2a2 2 0 0 1-2 1.8h-6.8a2 2 0 0 1-2-1.8z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+        <rect x="20" y={38 - 17 * progress} width="16" height={17 * progress} fill="rgb(var(--hue))" opacity="0.55" clipPath="url(#glass)"
+          style={{ transition: "y 1s linear, height 1s linear" }} />
       </svg>
-      <div className="text-sm">
-        <p className="font-medium">Look away</p>
-        <p className="text-xs text-zinc-400">20-20-20 · focus on something distant</p>
+      <div className="min-w-0">
+        <p className="text-sm font-medium">Drink some water</p>
+        <p className="num text-xs text-muted">Water break · {tick.remaining_secs} s left, then back to focus</p>
       </div>
     </div>
   );

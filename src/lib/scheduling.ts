@@ -87,7 +87,9 @@ export function scheduledTodayTasks(tasks: Task[]): Task[] {
     if (isTemplate(t)) return false;
     if (!t.date) return false;
     if (t.date === today) return true;
-    if (t.date < today && !t.completed) return true; // rolled over
+    // Unfinished past work rolls over — except missed recurring copies:
+    // today's own copy replaces them, so they don't pile up day after day.
+    if (t.date < today && !t.completed && !t.templateId) return true;
     return false;
   });
 }
@@ -108,4 +110,31 @@ export function orderForToday(a: Task, b: Task): number {
   const am = a.startMin ?? Infinity;
   const bm = b.startMin ?? Infinity;
   return am - bm;
+}
+
+/** Pomodoros planned for and done across a set of days (the Week figures).
+ *  Planned counts concrete tasks plus recurring projections; done counts the
+ *  pomodoros already logged on concrete tasks. */
+export function pomodorosForDays(tasks: Task[], daysISO: string[]): { done: number; planned: number } {
+  let done = 0;
+  let planned = 0;
+  for (const iso of daysISO) {
+    const { instances, projections } = tasksForDay(tasks, iso);
+    for (const t of instances) {
+      planned += t.estPomos;
+      done += Math.min(t.donePomos, t.estPomos);
+    }
+    for (const t of projections) planned += t.estPomos;
+  }
+  return { done, planned };
+}
+
+/** The order work is taken in: today's scheduled blocks by start time, then the
+ *  Anytime list in the order you dragged it into. Up next and auto-advance both
+ *  use this, so reordering Anytime changes what the clock moves to. */
+export function openTodayInOrder(tasks: Task[], excludeId?: string | null): Task[] {
+  const open = (t: Task) => !t.completed && t.id !== excludeId;
+  const scheduled = scheduledTodayTasks(tasks).filter(open)
+    .sort((a, b) => (a.startMin ?? Infinity) - (b.startMin ?? Infinity));
+  return [...scheduled, ...backlogTasks(tasks).filter(open)];
 }

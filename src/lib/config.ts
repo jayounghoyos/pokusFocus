@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-
+import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "./ipc";
 import type { ChimeStyle } from "./sound";
 
 export interface SchedulerConfig {
@@ -30,8 +29,8 @@ export const DEFAULT_CONFIG: SchedulerConfig = {
   long_break_secs: 15 * 60,
   long_break_every: 4,
   micro_break_enabled: true,
-  micro_break_interval_secs: 10 * 60,
-  micro_break_duration_secs: 20,
+  micro_break_interval_secs: 30 * 60,
+  micro_break_duration_secs: 30,
   auto_advance: true,
   strict_mode: false,
   sound_enabled: true,
@@ -50,7 +49,9 @@ export function loadConfig(): SchedulerConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_CONFIG;
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    const merged = { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as SchedulerConfig;
+    merged.long_break_every = Math.max(1, merged.long_break_every | 0);
+    return merged;
   } catch {
     return DEFAULT_CONFIG;
   }
@@ -64,26 +65,25 @@ export async function pushToBackend(config: SchedulerConfig) {
   }
 }
 
-export function useConfig(): [
-  SchedulerConfig,
-  (next: SchedulerConfig | ((prev: SchedulerConfig) => SchedulerConfig)) => void,
-] {
+type Next = SchedulerConfig | ((prev: SchedulerConfig) => SchedulerConfig);
+
+/** Settings state. Side effects (storage, backend push) run outside the
+ *  state updater so StrictMode's double-invoke can't duplicate them. */
+export function useConfig(): [SchedulerConfig, (next: Next) => void] {
   const [config, setConfigState] = useState<SchedulerConfig>(loadConfig);
+  const ref = useRef(config);
 
   useEffect(() => {
-    pushToBackend(config);
+    pushToBackend(ref.current);
   }, []);
 
-  const setConfig = (
-    next: SchedulerConfig | ((prev: SchedulerConfig) => SchedulerConfig),
-  ) => {
-    setConfigState((prev) => {
-      const value = typeof next === "function" ? next(prev) : next;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-      pushToBackend(value);
-      return value;
-    });
-  };
+  const setConfig = useCallback((next: Next) => {
+    const value = typeof next === "function" ? next(ref.current) : next;
+    ref.current = value;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    pushToBackend(value);
+    setConfigState(value);
+  }, []);
 
   return [config, setConfig];
 }

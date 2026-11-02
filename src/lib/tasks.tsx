@@ -1,7 +1,7 @@
 import {
   createContext, useContext, useEffect, useState, ReactNode, useCallback, useRef,
 } from "react";
-import { pendingMaterializations } from "./scheduling";
+import { openTodayInOrder, pendingMaterializations } from "./scheduling";
 
 export interface LegacyChecklistItem {
   id: string;
@@ -51,11 +51,13 @@ function loadMaterialized(): Set<string> {
   }
 }
 
+export const TASK_COLOR_NAMES = ["Ochre", "Blue", "Emerald", "Sand", "Red", "Pink", "Teal", "Grey"];
+
 export const TASK_COLORS = [
   "#e0a042", // amber (calendar default)
   "#3b82f6", // blue
   "#10b981", // emerald
-  "#a855f7", // violet
+  "#f2b33d", // amber light
   "#ef4444", // red
   "#ec4899", // pink
   "#14b8a6", // teal
@@ -105,6 +107,11 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(loadTasks);
   const [activeId, setActiveIdState] = useState<string | null>(loadActiveId);
   const materializedRef = useRef<Set<string>>(loadMaterialized());
+  // Latest committed values, read by callbacks that must not nest updaters.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const activeRef = useRef(activeId);
+  activeRef.current = activeId;
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
@@ -179,25 +186,21 @@ export function TasksProvider({ children }: { children: ReactNode }) {
 
   const incrementActivePomo = useCallback<TasksApi["incrementActivePomo"]>(
     (autoCheck) => {
-      setActiveIdState((curActive) => {
-        if (!curActive) return curActive;
-        setTasks((prev) => {
-          const updated = prev.map((t) =>
-            t.id === curActive ? { ...t, donePomos: t.donePomos + 1 } : t,
-          );
-          const active = updated.find((t) => t.id === curActive);
-          if (autoCheck && active && active.donePomos >= active.estPomos) {
-            const checked = updated.map((t) =>
-              t.id === curActive ? { ...t, completed: true } : t,
-            );
-            const next = checked.find((t) => !t.completed && t.id !== curActive);
-            queueMicrotask(() => setActiveIdState(next?.id ?? null));
-            return checked;
-          }
-          return updated;
-        });
-        return curActive;
-      });
+      const cur = activeRef.current;
+      const task = cur ? tasksRef.current.find((t) => t.id === cur) : undefined;
+      if (!task) return;
+      const donePomos = task.donePomos + 1;
+      const finished = autoCheck && donePomos >= task.estPomos;
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id ? { ...t, donePomos, completed: t.completed || finished } : t,
+        ),
+      );
+      if (finished) {
+        // Hand the clock to the next open task that is actually on Today.
+        const next = openTodayInOrder(tasksRef.current, task.id)[0];
+        setActiveIdState(next?.id ?? null);
+      }
     },
     [],
   );

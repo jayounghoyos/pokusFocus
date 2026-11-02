@@ -17,3 +17,6 @@ interesting_inspiration/
 s[0-9].png
 p[0-9].png
 calendar.png
+
+# taste-skill working files (inspector screenshots, direction sheet, design notes)
+.taste-skill/

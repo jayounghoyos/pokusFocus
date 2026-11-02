@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import clsx from "clsx";
-import { Check } from "../components/Check";
+import { Check } from "../components/ui";
 
 /** Render inline-level markdown: **bold**, *italic*, `code`, [text](url). */
 function renderInline(text: string): ReactNode {
@@ -10,7 +10,7 @@ function renderInline(text: string): ReactNode {
   while (remaining.length > 0) {
     let m: RegExpMatchArray | null;
     if ((m = remaining.match(/^\*\*([^*\n]+)\*\*/))) {
-      tokens.push(<strong key={key++} className="font-semibold text-zinc-100">{m[1]}</strong>);
+      tokens.push(<strong key={key++} className="font-semibold text-ink">{m[1]}</strong>);
       remaining = remaining.slice(m[0].length);
       continue;
     }
@@ -21,7 +21,7 @@ function renderInline(text: string): ReactNode {
     }
     if ((m = remaining.match(/^`([^`\n]+)`/))) {
       tokens.push(
-        <code key={key++} className="px-1 py-0.5 rounded bg-zinc-800 text-[0.85em] font-mono text-zinc-200">
+        <code key={key++} className="px-1 py-0.5 rounded bg-raised text-[0.85em] font-mono text-ink">
           {m[1]}
         </code>,
       );
@@ -30,7 +30,7 @@ function renderInline(text: string): ReactNode {
     }
     if ((m = remaining.match(/^\[([^\]]+)\]\(([^)]+)\)/))) {
       tokens.push(
-        <a key={key++} href={m[2]} target="_blank" rel="noreferrer" className="text-focus-work hover:underline">
+        <a key={key++} href={m[2]} target="_blank" rel="noreferrer" className="underline decoration-control underline-offset-2 hover:decoration-ink">
           {m[1]}
         </a>,
       );
@@ -68,7 +68,7 @@ export function MarkdownView({
   const flushBullets = () => {
     if (bulletBuf.length) {
       result.push(
-        <ul key={`ul-${bulletStartKey}`} className="list-disc pl-5 my-1 space-y-0.5 marker:text-zinc-600">
+        <ul key={`ul-${bulletStartKey}`} className="list-disc pl-5 my-1 space-y-0.5 marker:text-faint">
           {bulletBuf}
         </ul>,
       );
@@ -93,10 +93,10 @@ export function MarkdownView({
               checked={done}
               onChange={() => onToggleTask(i)}
               size={14}
-              ariaLabel={done ? "Uncheck task" : "Check task"}
+              label={done ? "Uncheck task" : "Check task"}
             />
           </span>
-          <span className={clsx("flex-1 text-sm leading-relaxed", done && "line-through text-zinc-500")}>
+          <span className={clsx("flex-1 text-sm leading-relaxed", done && "line-through text-muted")}>
             {renderInline(text)}
           </span>
         </div>,
@@ -107,7 +107,7 @@ export function MarkdownView({
     if (bulletMatch) {
       if (bulletBuf.length === 0) bulletStartKey = i;
       bulletBuf.push(
-        <li key={i} className="text-sm text-zinc-300 leading-relaxed">
+        <li key={i} className="text-sm text-ink leading-relaxed">
           {renderInline(bulletMatch[2])}
         </li>,
       );
@@ -116,7 +116,7 @@ export function MarkdownView({
     flushBullets();
     if (line.startsWith("### ")) {
       result.push(
-        <h4 key={i} className="text-sm font-semibold mt-3 mb-1 text-zinc-100">
+        <h4 key={i} className="text-sm font-semibold mt-3 mb-1 text-ink">
           {renderInline(line.slice(4))}
         </h4>,
       );
@@ -124,7 +124,7 @@ export function MarkdownView({
     }
     if (line.startsWith("## ")) {
       result.push(
-        <h3 key={i} className="text-base font-semibold mt-3 mb-1.5 text-zinc-100">
+        <h3 key={i} className="text-base font-semibold mt-3 mb-1.5 text-ink">
           {renderInline(line.slice(3))}
         </h3>,
       );
@@ -132,7 +132,7 @@ export function MarkdownView({
     }
     if (line.startsWith("# ")) {
       result.push(
-        <h2 key={i} className="text-lg font-semibold mt-3.5 mb-1.5 text-zinc-100">
+        <h2 key={i} className="text-lg font-semibold mt-3.5 mb-1.5 text-ink">
           {renderInline(line.slice(2))}
         </h2>,
       );
@@ -143,7 +143,7 @@ export function MarkdownView({
       return;
     }
     result.push(
-      <p key={i} className="text-sm leading-relaxed text-zinc-300 my-0.5">
+      <p key={i} className="text-sm leading-relaxed text-ink my-0.5">
         {renderInline(line)}
       </p>,
     );

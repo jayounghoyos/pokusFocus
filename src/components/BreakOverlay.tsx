@@ -1,129 +1,84 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { loadConfig } from "../lib/config";
 import { stopAllChimes } from "../lib/sound";
+import { closeOwnWindow, scheduler } from "../lib/ipc";
+import { clock, duration } from "../lib/format";
+import type { TickEvent } from "../lib/types";
+import { Mark } from "./ui";
 
-type Phase = "Work" | "ShortBreak" | "LongBreak" | "MicroBreak" | "Idle";
-
-interface TickEvent {
-  phase: Phase;
-  remaining_secs: number;
-  total_secs: number;
-  cycle: number;
-}
-
-const messages: Record<Phase, string> = {
-  ShortBreak: "Stand up. Roll your shoulders. Look out a window.",
-  LongBreak: "Step away from the desk. Walk. Drink water. Real stretch.",
-  Work: "",
-  MicroBreak: "",
-  Idle: "",
+const MOVES: Record<"ShortBreak" | "LongBreak", { lead: string; moves: string[] }> = {
+  ShortBreak: {
+    lead: "Stand up. Let your eyes go far.",
+    moves: ["Roll your shoulders back, five times", "Look out of a window for twenty seconds", "Unclench your jaw and hands"],
+  },
+  LongBreak: {
+    lead: "Step away from the desk.",
+    moves: ["Walk to another room, or outside", "Drink a glass of water", "Stretch your back and the backs of your legs"],
+  },
 };
 
-function fmt(sec: number) {
-  const m = Math.floor(sec / 60).toString().padStart(2, "0");
-  const s = Math.floor(sec % 60).toString().padStart(2, "0");
-  return `${m}:${s}`;
-}
-
+/** Fullscreen break window. It closes itself only when the scheduler says the
+ *  break is over — so in strict mode there is no way around it but the clock. */
 export function BreakOverlay() {
   const [tick, setTick] = useState<TickEvent | null>(null);
   const config = loadConfig();
-  const postponeMins = Math.round(config.postpone_secs / 60);
+  const strict = config.strict_mode;
+
+  useEffect(() => scheduler.onTick((t) => {
+    if (t.phase === "ShortBreak" || t.phase === "LongBreak") setTick(t);
+    else { stopAllChimes(); closeOwnWindow(); }
+  }), []);
+
+  const postpone = () => { stopAllChimes(); scheduler.postpone(config.postpone_secs); };
+  const skip = () => { stopAllChimes(); scheduler.skip(); };
 
   useEffect(() => {
-    const unlisten = listen<TickEvent>("scheduler://tick", (e) => {
-      const t = e.payload;
-      if (t.phase === "ShortBreak" || t.phase === "LongBreak") {
-        setTick(t);
-      } else {
-        stopAllChimes();
-        getCurrentWindow().close().catch(() => {});
-      }
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
-
-  useEffect(() => {
+    if (strict) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        invoke("scheduler_skip");
-        stopAllChimes();
-        getCurrentWindow().close().catch(() => {});
-      } else if (e.key === "p" || e.key === "P") {
-        invoke("scheduler_postpone", { secs: config.postpone_secs });
-        stopAllChimes();
-        getCurrentWindow().close().catch(() => {});
-      }
+      if (e.key === "Escape") skip();
+      else if (e.key === "p" || e.key === "P") postpone();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [config.postpone_secs]);
+  });
 
-  if (!tick) {
-    return (
-      <div className="h-full flex items-center justify-center bg-zinc-950 text-zinc-400">
-        Preparing break…
-      </div>
-    );
-  }
+  if (!tick) return <div className="h-full bg-ground" />;
 
-  const progress = 1 - tick.remaining_secs / tick.total_secs;
-  const tone = tick.phase === "LongBreak" ? "from-blue-950" : "from-emerald-950";
+  const kind = tick.phase as "ShortBreak" | "LongBreak";
+  const { lead, moves } = MOVES[kind];
+  const progress = tick.total_secs ? 1 - tick.remaining_secs / tick.total_secs : 0;
 
   return (
-    <div
-      className={`h-full w-full flex flex-col items-center justify-center
-                  bg-gradient-to-br ${tone} via-zinc-950 to-zinc-950
-                  text-zinc-100 select-none animate-fade-in`}
-    >
-      <p className="text-xs uppercase tracking-[0.3em] text-zinc-400 mb-4">
-        {tick.phase === "LongBreak" ? "Long break" : "Short break"}
-      </p>
-      <p className="text-[10rem] font-extralight tabular-nums leading-none">
-        {fmt(tick.remaining_secs)}
-      </p>
-      <p className="mt-8 max-w-md text-center text-lg text-zinc-300">
-        {messages[tick.phase]}
-      </p>
+    <main className="flex h-full select-none flex-col bg-ground px-[8vw] py-[7vh] animate-rise">
+      <header className="flex items-center gap-2.5 text-muted">
+        <Mark size={20} />
+        <span className="text-sm">{kind === "LongBreak" ? "Long break" : "Short break"} · {duration(tick.total_secs)}</span>
+      </header>
 
-      <div className="mt-16 w-2/3 max-w-2xl h-0.5 bg-zinc-800 rounded-full overflow-hidden">
-        <div
-          className="h-full bg-zinc-400 transition-[width] duration-1000 ease-linear"
-          style={{ width: `${progress * 100}%` }}
-        />
+      <div className="flex flex-1 flex-col justify-center">
+        <h1 className="text-[32px] font-medium leading-tight tracking-[-0.02em]">{lead}</h1>
+        <p className="num mt-6 text-[clamp(96px,16vw,200px)] font-light leading-none tracking-[-0.04em]" aria-label={`${clock(tick.remaining_secs)} left`}>
+          {clock(tick.remaining_secs)}
+        </p>
+        <div className="mt-8 h-[3px] max-w-3xl overflow-hidden rounded-full bg-raised">
+          <div className="h-full rounded-full bg-muted transition-[width] duration-1000 ease-linear" style={{ width: `${progress * 100}%` }} />
+        </div>
+        <ul className="mt-10 grid max-w-3xl gap-3 text-lg text-muted sm:grid-cols-3">
+          {moves.map((m) => <li key={m} className="rounded-2xl bg-surface px-5 py-4 text-base text-ink">{m}</li>)}
+        </ul>
       </div>
 
-      <div className="mt-12 flex gap-3">
-        <button
-          className="btn-ghost"
-          onClick={() => {
-            invoke("scheduler_postpone", { secs: config.postpone_secs });
-            stopAllChimes();
-            getCurrentWindow().close().catch(() => {});
-          }}
-        >
-          + {postponeMins} min
-        </button>
-        <button
-          className="btn-ghost"
-          onClick={async () => {
-            await invoke("scheduler_skip");
-            stopAllChimes();
-            getCurrentWindow().close().catch(() => {});
-          }}
-        >
-          Skip break
-        </button>
-      </div>
-
-      <p className="absolute bottom-6 text-[10px] text-zinc-700 tracking-wider">
-        Esc to skip · P to postpone
-      </p>
-    </div>
+      <footer className="flex flex-wrap items-center gap-3">
+        {strict ? (
+          <p className="text-sm text-muted">Strict mode is on. The break ends when the clock does.</p>
+        ) : (
+          <>
+            <button className="btn-outline" onClick={postpone}>Postpone {duration(config.postpone_secs)}</button>
+            <button className="btn-text" onClick={skip}>Skip break</button>
+            <span className="ml-auto text-xs text-faint"><kbd className="kbd">P</kbd> postpone · <kbd className="kbd">Esc</kbd> skip</span>
+          </>
+        )}
+      </footer>
+    </main>
   );
 }

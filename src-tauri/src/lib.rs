@@ -54,6 +54,12 @@ fn scheduler_update_config(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be registered first: a second launch (e.g. from the app menu while
+        // the autostarted copy sits in the tray) focuses the running instance
+        // instead of spawning a second scheduler + tray icon.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            toggle_main_window(app, true);
+        }))
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
@@ -71,6 +77,7 @@ pub fn run() {
         })
         .setup(|app| {
             build_tray(app.handle())?;
+            heal_autostart_entry(app.handle());
 
             let started_minimized = std::env::args().any(|a| a == "--minimized");
             if !started_minimized {
@@ -101,6 +108,27 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// The autostart plugin records `current_exe()` only at the moment the user
+/// toggles it on. If that happened under `tauri dev`, the login entry points at
+/// the debug binary, which loads its UI from the (not running) Vite dev server
+/// and boots into a dead window. Release builds re-register on every launch so
+/// the entry always targets the binary that is actually installed. Debug builds
+/// never rewrite it, so a dev session can't re-break a working install.
+fn heal_autostart_entry(app: &AppHandle) {
+    #[cfg(not(debug_assertions))]
+    {
+        use tauri_plugin_autostart::ManagerExt;
+        let launcher = app.autolaunch();
+        if launcher.is_enabled().unwrap_or(false) {
+            if let Err(e) = launcher.enable() {
+                eprintln!("failed to refresh autostart entry: {e}");
+            }
+        }
+    }
+    #[cfg(debug_assertions)]
+    let _ = app;
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show window", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause / Resume", true, None::<&str>)?;
@@ -118,7 +146,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "show" => toggle_main_window(app, true),
             "pause" => {
                 if let Some(h) = app.try_state::<SchedulerHandle>() {
-                    h.pause();
+                    h.toggle();
                 }
             }
             "skip" => {
@@ -186,7 +214,7 @@ fn update_tray_tooltip(app: &AppHandle, tick: &TickEvent) {
         Phase::Work => "focus",
         Phase::ShortBreak => "short break",
         Phase::LongBreak => "long break",
-        Phase::MicroBreak => "micro break",
+        Phase::MicroBreak => "water break",
     };
     let _ = tray.set_tooltip(Some(format!("pokusFocus — {phase} {mins:02}:{secs:02}")));
 }
@@ -222,7 +250,7 @@ fn open_toast(app: &AppHandle) {
         TOAST_LABEL,
         WebviewUrl::App("index.html#/toast".into()),
     )
-    .title("micro-break")
+    .title("water break")
     .inner_size(320.0, 80.0)
     .position(40.0, 40.0)
     .always_on_top(true)

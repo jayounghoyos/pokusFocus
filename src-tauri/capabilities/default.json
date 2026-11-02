@@ -1,8 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for the main window",
-  "windows": ["main"],
+  "description": "Main window plus the break overlay and eye-rest toast windows it opens",
+  "windows": [
+    "main",
+    "overlay",
+    "toast"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-close",

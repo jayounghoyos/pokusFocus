@@ -42,8 +42,8 @@ impl Default for SchedulerConfig {
             long_break_secs: 15 * 60,
             long_break_every: 4,
             micro_break_enabled: true,
-            micro_break_interval_secs: 10 * 60,
-            micro_break_duration_secs: 20,
+            micro_break_interval_secs: 30 * 60,
+            micro_break_duration_secs: 30,
             auto_advance: true,
             strict_mode: false,
             sound_enabled: true,
@@ -72,6 +72,13 @@ pub struct TickEvent {
     pub remaining_secs: u32,
     pub total_secs: u32,
     pub cycle: u32,
+    /// Whether the clock is ticking. The UI derives its Start/Pause state from
+    /// this instead of guessing, so the tray and auto-advance stay in sync.
+    #[serde(default)]
+    pub running: bool,
+    /// Cycles per long break, so the UI can draw the ladder without its own copy.
+    #[serde(default)]
+    pub long_break_every: u32,
 }
 
 /// Internal state. `micro` is layered on top of `main` — when active,
@@ -108,11 +115,12 @@ impl State {
         }
     }
 
+    /// Note: the water-break counter is *not* reset here. It counts focus time
+    /// across sessions, so a reminder every 30 m still fires with 25 m sessions.
     fn enter_work(&mut self) {
         self.main_phase = Phase::Work;
         self.main_total = self.config.work_secs;
         self.main_remaining = self.config.work_secs;
-        self.secs_since_last_micro = 0;
     }
 
     fn enter_short_break(&mut self) {
@@ -146,7 +154,7 @@ impl State {
                     return;
                 }
                 self.cycle += 1;
-                if self.cycle % self.config.long_break_every == 0 {
+                if self.cycle % self.config.long_break_every.max(1) == 0 {
                     self.enter_long_break();
                 } else {
                     self.enter_short_break();
@@ -161,6 +169,32 @@ impl State {
         }
     }
 
+    /// Takes new settings. While idle the clock shows the next focus length,
+    /// so it must follow the setting instead of keeping the old 25:00.
+    fn apply_config(&mut self, config: SchedulerConfig) {
+        self.config = config;
+        if self.main_phase == Phase::Idle {
+            self.main_total = self.config.work_secs;
+            self.main_remaining = self.config.work_secs;
+        }
+    }
+
+    /// Closes the current main phase and advances. `skipped` is true when the
+    /// user ended it early; the UI only credits a pomodoro for a finished focus.
+    fn end_main_phase(&mut self, skipped: bool) -> PhaseEndPayload {
+        let ended = self.main_phase;
+        let elapsed_secs = self.main_total.saturating_sub(self.main_remaining);
+        let is_postponed = ended == Phase::Work && self.postponed_break.is_some();
+        self.advance_after_main_end();
+        PhaseEndPayload {
+            ended,
+            started: self.main_phase,
+            is_postponed,
+            elapsed_secs,
+            skipped,
+        }
+    }
+
     fn snapshot_tick(&self) -> TickEvent {
         if self.micro_active {
             TickEvent {
@@ -168,6 +202,8 @@ impl State {
                 remaining_secs: self.micro_remaining,
                 total_secs: self.config.micro_break_duration_secs,
                 cycle: self.cycle,
+                running: self.running,
+                long_break_every: self.config.long_break_every.max(1),
             }
         } else {
             TickEvent {
@@ -175,6 +211,8 @@ impl State {
                 remaining_secs: self.main_remaining,
                 total_secs: self.main_total,
                 cycle: self.cycle,
+                running: self.running,
+                long_break_every: self.config.long_break_every.max(1),
             }
         }
     }
@@ -264,19 +302,11 @@ impl Scheduler {
         }
 
         if s.main_remaining == 0 {
-            let ending = s.main_phase;
-            let was_postponed = ending == Phase::Work && s.postponed_break.is_some();
-            s.advance_after_main_end();
+            let payload = s.end_main_phase(false);
             if !s.config.auto_advance {
                 s.running = false;
             }
-            let _ = self
-                .app
-                .emit("scheduler://phase-end", PhaseEndPayload {
-                    ended: ending,
-                    started: s.main_phase,
-                    is_postponed: was_postponed,
-                });
+            let _ = self.app.emit("scheduler://phase-end", payload);
         }
     }
 
@@ -290,6 +320,16 @@ impl Scheduler {
 
     pub fn pause(&self) {
         self.state.lock().running = false;
+    }
+
+    /// Tray "Pause / Resume": one entry that flips the clock either way.
+    pub fn toggle(&self) {
+        let running = self.state.lock().running;
+        if running {
+            self.pause();
+        } else {
+            self.start();
+        }
     }
 
     pub fn skip(&self) {
@@ -309,21 +349,18 @@ impl Scheduler {
             let _ = self.app.emit("scheduler://micro-end", ());
             return;
         }
-        let ending = s.main_phase;
-        let was_postponed = ending == Phase::Work && s.postponed_break.is_some();
-        s.advance_after_main_end();
-        let _ = self.app.emit(
-            "scheduler://phase-end",
-            PhaseEndPayload {
-                ended: ending,
-                started: s.main_phase,
-                is_postponed: was_postponed,
-            },
-        );
+        if s.main_phase == Phase::Idle {
+            return;
+        }
+        let payload = s.end_main_phase(true);
+        let _ = self.app.emit("scheduler://phase-end", payload);
     }
 
     pub fn reset(&self) {
         let mut s = self.state.lock();
+        if s.micro_active {
+            let _ = self.app.emit("scheduler://micro-end", ());
+        }
         s.running = false;
         s.postponed_break = None;
         s.enter_idle();
@@ -331,7 +368,7 @@ impl Scheduler {
 
     pub fn postpone(&self, secs: u32) {
         let mut s = self.state.lock();
-        if !matches!(s.main_phase, Phase::ShortBreak | Phase::LongBreak) {
+        if !matches!(s.main_phase, Phase::ShortBreak | Phase::LongBreak) || s.config.strict_mode {
             return;
         }
         let break_phase = s.main_phase;
@@ -340,13 +377,14 @@ impl Scheduler {
         s.main_phase = Phase::Work;
         s.main_total = secs;
         s.main_remaining = secs;
-        s.secs_since_last_micro = 0;
         let _ = self.app.emit(
             "scheduler://phase-end",
             PhaseEndPayload {
                 ended: break_phase,
                 started: Phase::Work,
                 is_postponed: true,
+                elapsed_secs: break_total.saturating_sub(s.main_remaining),
+                skipped: true,
             },
         );
     }
@@ -356,8 +394,7 @@ impl Scheduler {
     }
 
     pub fn update_config(&self, config: SchedulerConfig) {
-        let mut s = self.state.lock();
-        s.config = config;
+        self.state.lock().apply_config(config);
     }
 }
 
@@ -366,6 +403,10 @@ struct PhaseEndPayload {
     ended: Phase,
     started: Phase,
     is_postponed: bool,
+    /// Seconds actually spent in the phase that ended (for the session log).
+    elapsed_secs: u32,
+    /// The phase was ended early by skip or postpone, not by running out.
+    skipped: bool,
 }
 
 /// Thin Tauri-managed wrapper around `Arc<Scheduler>`.
@@ -374,9 +415,87 @@ pub struct SchedulerHandle(pub Arc<Scheduler>);
 impl SchedulerHandle {
     pub fn start(&self) { self.0.start(); }
     pub fn pause(&self) { self.0.pause(); }
+    pub fn toggle(&self) { self.0.toggle(); }
     pub fn skip(&self) { self.0.skip(); }
     pub fn reset(&self) { self.0.reset(); }
     pub fn postpone(&self, secs: u32) { self.0.postpone(secs); }
     pub fn config(&self) -> SchedulerConfig { self.0.config() }
     pub fn update_config(&self, c: SchedulerConfig) { self.0.update_config(c); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg() -> SchedulerConfig {
+        SchedulerConfig { long_break_every: 2, ..SchedulerConfig::default() }
+    }
+
+    #[test]
+    fn work_ends_into_short_then_long_break() {
+        let mut s = State::new(cfg());
+        s.enter_work();
+        s.main_remaining = 0;
+        let p = s.end_main_phase(false);
+        assert_eq!((p.ended, p.started, p.skipped), (Phase::Work, Phase::ShortBreak, false));
+        assert_eq!(p.elapsed_secs, 25 * 60);
+
+        s.end_main_phase(false); // break -> work
+        s.main_remaining = 0;
+        let p = s.end_main_phase(false);
+        assert_eq!(p.started, Phase::LongBreak, "every 2nd cycle is a long break");
+    }
+
+    #[test]
+    fn skipping_reports_partial_elapsed_time() {
+        let mut s = State::new(cfg());
+        s.enter_work();
+        s.main_remaining = 25 * 60 - 90;
+        let p = s.end_main_phase(true);
+        assert!(p.skipped);
+        assert_eq!(p.elapsed_secs, 90);
+    }
+
+    #[test]
+    fn postponed_break_resumes_after_brief_work() {
+        let mut s = State::new(cfg());
+        s.enter_short_break();
+        s.postponed_break = Some((Phase::ShortBreak, s.main_total));
+        s.main_phase = Phase::Work;
+        let p = s.end_main_phase(false);
+        assert!(p.is_postponed);
+        assert_eq!(p.started, Phase::ShortBreak);
+        assert_eq!(s.cycle, 0, "a postponement is not a new cycle");
+    }
+
+    #[test]
+    fn idle_clock_follows_new_focus_length() {
+        let mut s = State::new(SchedulerConfig::default());
+        s.apply_config(SchedulerConfig { work_secs: 50 * 60, ..SchedulerConfig::default() });
+        assert_eq!(s.snapshot_tick().remaining_secs, 50 * 60);
+
+        s.enter_work();
+        s.main_remaining = 600;
+        s.apply_config(SchedulerConfig { work_secs: 40 * 60, ..SchedulerConfig::default() });
+        assert_eq!(s.main_remaining, 600, "a running session keeps its own clock");
+    }
+
+    #[test]
+    fn water_counter_carries_across_focus_sessions() {
+        let mut s = State::new(SchedulerConfig::default());
+        s.enter_work();
+        s.secs_since_last_micro = 25 * 60;
+        s.main_remaining = 0;
+        s.end_main_phase(false); // -> short break
+        s.end_main_phase(false); // -> focus again
+        assert_eq!(s.secs_since_last_micro, 25 * 60);
+    }
+
+    #[test]
+    fn zero_long_break_every_does_not_panic() {
+        let mut s = State::new(SchedulerConfig { long_break_every: 0, ..SchedulerConfig::default() });
+        s.enter_work();
+        let p = s.end_main_phase(false);
+        assert_eq!(p.started, Phase::LongBreak);
+    }
 }

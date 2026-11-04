@@ -1,0 +1,62 @@
+name: Release
+
+# Builds the Linux bundles on Ubuntu 22.04 so they link against glibc 2.35 and run on
+# Ubuntu/Pop!_OS 22.04 and newer. A binary built on a newer distro won't start on older ones.
+#
+# - Push a `v*` tag  -> builds and attaches the .deb + .AppImage to a draft release for that tag.
+# - Run manually     -> builds and uploads the bundles as a workflow artifact only.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            patchelf libxdo-dev librsvg2-dev
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Empty on manual runs, so the action only builds and doesn't touch releases.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('pokusFocus {0}', github.ref_name) || '' }}
+          releaseDraft: true
+
+      - name: Check the binary runs on glibc 2.35
+        run: |
+          max=$(objdump -T src-tauri/target/release/pokus-focus | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "Highest glibc symbol required: $max"
+          [ "$(printf '%s\nGLIBC_2.35\n' "$max" | sort -V | tail -1)" = "GLIBC_2.35" ]
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pokusFocus-linux
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
